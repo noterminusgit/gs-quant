@@ -176,7 +176,7 @@ class ContextBaseWithDefault(ContextBase):
 
 try:
     from contextlib import nullcontext
-except ImportError:
+except ImportError:  # pragma: no cover
     from contextlib import AbstractContextManager
 
     class nullcontext(AbstractContextManager):

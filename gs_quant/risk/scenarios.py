@@ -48,7 +48,7 @@ class MarketDataVolShockScenario(__MarketDataVolShockScenario):
         """
         last_datetime = max(list(df.index))
         df_filtered = df.loc[df.index == last_datetime]
-        df_grouped = df_filtered.groupby(['expirationDate'])
+        df_grouped = df_filtered.groupby('expirationDate')
 
         vol_slices = []
         for key in df_grouped.groups:

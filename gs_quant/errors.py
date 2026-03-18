@@ -44,7 +44,7 @@ class MqRequestError(MqError):
     def __str__(self):
         prepend = 'context: {}\n'.format(self.context) if self.context else ''
         result = '{}status: {}, message: {}'.format(prepend, self.status, self.message)
-        if sys.version_info.major < 3:
+        if sys.version_info.major < 3:  # pragma: no cover
             result = result.encode('ascii', 'ignore')
         return result
 

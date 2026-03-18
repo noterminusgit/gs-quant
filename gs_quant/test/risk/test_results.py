@@ -1,6 +1,6 @@
 """
-Copyright 2018 Goldman Sachs.
-Licensed under the Apache License, Version 2.0 (the 'License');
+Copyright 2019 Goldman Sachs.
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
@@ -8,799 +8,1210 @@ You may obtain a copy of the License at
 
 Unless required by applicable law or agreed to in writing,
 software distributed under the License is distributed on an
-'AS IS' BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 """
 
 import datetime as dt
+from unittest.mock import MagicMock, patch
 
-import gs_quant.risk as risk
-import numpy as np
+import pandas as pd
 import pytest
-from gs_quant.base import RiskKey
-from gs_quant.common import MarketDataPattern, RiskRequestParameters
-from gs_quant.instrument import IRSwap, IRBasisSwap, IRSwaption, FXMultiCrossBinary, FXMultiCrossBinaryLeg, CommodSwap
-from gs_quant.markets import HistoricalPricingContext, PricingContext, CloseMarket, MarketDataCoordinate
-from gs_quant.markets.portfolio import Portfolio
-from gs_quant.risk import MultiScenario, ResolvedInstrumentValues
-from gs_quant.risk import Price, RollFwd, CurveScenario, ErrorValue, DataFrameWithInfo, AggregationLevel, PnlExplain
-from gs_quant.risk.core import aggregate_risk, SeriesWithInfo, FloatWithInfo, StringWithInfo
-from gs_quant.risk.results import MultipleScenarioFuture
-from gs_quant.risk.results import MultipleScenarioResult
-from gs_quant.risk.transform import ResultWithInfoAggregator
-from gs_quant.test.utils.mock_calc import MockCalc
 
-curvescen1 = CurveScenario(
-    market_data_pattern=MarketDataPattern('IR', 'USD'), parallel_shift=5, name='parallel shift5bp'
+from gs_quant.base import RiskKey, Scenario
+from gs_quant.common import RiskMeasure
+from gs_quant.markets.markets import CloseMarket
+from gs_quant.risk import ErrorValue, DataFrameWithInfo, FloatWithInfo, SeriesWithInfo
+from gs_quant.risk.core import UnsupportedValue
+from gs_quant.risk.results import (
+    PricingFuture,
+    CompositeResultFuture,
+    MultipleRiskMeasureFuture,
+    MultipleRiskMeasureResult,
+    MultipleScenarioFuture,
+    MultipleScenarioResult,
+    HistoricalPricingFuture,
+    PortfolioPath,
+    PortfolioRiskResult,
+    get_default_pivots,
+    pivot_to_frame,
+    _compose,
+    _get_value_with_info,
+    _risk_keys_compatible,
+    _value_for_measure_or_scen,
 )
-curvescen2 = CurveScenario(
-    market_data_pattern=MarketDataPattern('IR', 'USD'),
-    curve_shift=1,
-    tenor_start=5,
-    tenor_end=30,
-    name='curve shift1bp',
-)
-rollfwd = RollFwd(date=dt.date(2020, 11, 3), name='roll fwd scenario')
-multiscenario = MultiScenario(scenarios=tuple((curvescen1, curvescen2)), name='multiscenario')
-
-
-def get_attributes(p, risks, ctx='PricingCtx1', resolve=False, no_frame=False):
-    contexts = {
-        'Multiple': HistoricalPricingContext(dt.date(2020, 1, 14), dt.date(2020, 1, 15), market_data_location='LDN'),
-        'PricingCtx1': PricingContext(dt.date(2020, 1, 14), market_data_location='LDN'),
-        'Multiple2': HistoricalPricingContext(dt.date(2020, 1, 16), dt.date(2020, 1, 17), market_data_location='LDN'),
-        'PricingCtx2': PricingContext(dt.date(2020, 1, 16), market_data_location='NYC'),
-        'PricingCtx3': PricingContext(dt.date(2020, 1, 16), market_data_location='LDN'),
-        'RollFwd': rollfwd,
-        'CurveScen1': curvescen1,
-        'CurveScen2': curvescen2,
-        'MultiScen': multiscenario,
-    }
-    if resolve:
-        p.resolve()
-    if contexts.get(ctx):
-        with contexts.get(ctx):
-            res = p.calc(risks)
-    elif ctx == 'Composite':
-        with rollfwd, multiscenario:
-            res = p.calc(risks)
-
-    if not no_frame:
-        frame = res.to_frame(None, None, None)
-        return [col for col in frame.columns], res, frame
-    else:
-        return res
-
-
-swap_1 = IRSwap("Pay", "5y", "EUR", fixed_rate=-0.005, name="5y")
-swap_2 = IRSwap("Pay", "10y", "EUR", fixed_rate=-0.005, name="10y")
-swap_3 = IRSwap("Pay", "5y", "USD", fixed_rate=-0.005, name="5y")
-swap_4 = IRSwap("Pay", "10y", "USD", fixed_rate=-0.005, name="10y")
-swap_5 = IRSwap("Pay", "5y", "GBP", fixed_rate=-0.005, name="5y")
-swap_6 = IRSwap("Pay", "10y", "GBP", fixed_rate=-0.005, name="10y")
-swap_7 = IRSwap("Pay", "5y", "JPY", fixed_rate=-0.005, name="5y")
-swap_8 = IRSwap("Pay", "10y", "JPY", fixed_rate=-0.005, name="10y")
-commod_swap = CommodSwap(name="Test")
-eur_port = Portfolio([swap_1, swap_2], name="EUR")
-usd_port = Portfolio([swap_3, swap_4], name="USD")
-gbp_port = Portfolio([swap_5, swap_6], name="GBP")
-jpy_port = Portfolio([swap_7, swap_8], name='JPY')
-port1 = Portfolio([eur_port, gbp_port], name='EURGBP')
-port2 = Portfolio([jpy_port, usd_port], name='USDJPY')
-commod_port = Portfolio([commod_swap])
-port = Portfolio([port1, port2])
-swaption_port = Portfolio(
-    [
-        IRSwaption("Receive", '5y', 'USD', expiration_date='2m', strike='atm', name='Swaption1'),
-        IRSwaption("Receive", '10y', 'USD', expiration_date='3m', strike='atm', name='Swaption2'),
-    ]
-)
-
-bs = IRBasisSwap(
-    termination_date="2y",
-    notional_currency="GBP",
-    notional_amount="$405392/bp",
-    effective_date="10y",
-    payer_rate_option="OIS",
-    receiver_frequency="3m",
-    name='IRBasisSwap',
-)
-
-bs_port = Portfolio([bs])
-mixed_port = Portfolio([bs_port, gbp_port])
-
-swaption_1 = IRSwaption('Pay', '5y', 'USD', expiration_date='1y', name='1y')
-swaption_2 = IRSwaption('Pay', '5y', 'USD', expiration_date='3m', name='3m')
-swaption_3 = IRSwaption('Pay', '5y', 'USD', expiration_date='6m', name='6m')
-
-swaption_port1 = Portfolio((swaption_1, swaption_2, swaption_3))
-swaption_port2 = Portfolio([swaption_1, swaption_2])
-swap_port1 = Portfolio([swaption_port1, usd_port])
-swap_port2 = Portfolio([swaption_port2, usd_port])
-# Portfolio of swaption with an unmarked correlation
-swaption_port3 = Portfolio(IRSwaption('Pay', termination_date='6m', effective_date='2y', expiration_date='3y'))
-
-mcb = Portfolio(FXMultiCrossBinary(name='mcb', legs=(FXMultiCrossBinaryLeg(),)), name='mcb_port')
-
-
-def default_pivot_table_test(res, with_dates=''):
-    port_depth = len(max(res.portfolio.all_paths, key=len))
-    pivot_df = res.to_frame()
-    if with_dates == 'dated':
-        assert pivot_df.index.name == 'dates'
-    else:
-        if with_dates == 'has_bucketed':
-            if res.dates:
-                assert pivot_df.index.names[-3:] == ['instrument_name', 'risk_measure', 'dates']
-            else:
-                assert pivot_df.index.names[-2:] == ['instrument_name', 'risk_measure']
-            assert pivot_df.columns.values[-1] == 'value'
-        else:
-            if port_depth == 1:
-                assert pivot_df.index.nlevels == port_depth
-
-            if len(res._multi_scen_key) > 1:
-                if len(res.risk_measures) > 1:
-                    assert pivot_df.columns.names == ['risk_measure', 'scenario']
-                else:
-                    assert pivot_df.columns.name == 'scenario'
-            else:
-                if port_depth == 1:
-                    assert pivot_df.columns.name == 'risk_measure'
-                else:
-                    assert pivot_df.columns.names[-1] == 'risk_measure'
-
-
-def price_values_test(res, f, with_dates=''):
-    port_depth = len(max(res.portfolio.all_paths, key=len)) + 1  # +1 for risk measure
-    if with_dates == 'dated':
-        port_depth += 1  # +1 for dates
-    if len(res.risk_measures) > 1:
-        res_val_map = [n for r in res for n in r[Price].values] if with_dates == 'dated' else [r[Price] for r in res]
-    else:
-        res_val_map = [n for r in res for n in r.values] if with_dates == 'dated' else list(res)
-
-    f = f.replace('N/A', np.nan)[f['risk_measure'] == risk.Price].dropna(axis='columns')
-    df_val_map = f['value'].values
-    f = f.drop('value', axis=1)
-
-    assert all(res_val_map == df_val_map)  # check if price values are correctly tabulated
-    assert port_depth == f.columns.size  # check if index setting is correct
-
-
-def test_multi_scenario(mocker):
-    with MockCalc(mocker):
-        _, r1, f1 = get_attributes(usd_port, risk.Price, resolve=True, ctx='MultiScen')
-        _, r2, f2 = get_attributes(usd_port, (risk.Price, risk.DollarPrice), resolve=True, ctx='MultiScen')
-        _, r3, f3 = get_attributes(port1, (risk.IRFwdRate, risk.Price), resolve=True, ctx='MultiScen')
-        _, r4, f4 = get_attributes(port1, risk.Price, resolve=True, ctx='MultiScen')
-
-    default_pivot_table_test(r1)
-    default_pivot_table_test(r2)
-    default_pivot_table_test(r3)
-    default_pivot_table_test(r4)
-
-    # test slicing
-    swap_res = r1[swap_3]
-    swap_res_idx = r1[0]
-    assert isinstance(swap_res, MultipleScenarioResult)
-    assert swap_res == swap_res_idx
-
-    multi_rm_and_scen_res = r3[curvescen1]
-    multi_scen_res = r4[curvescen1]
-    assert multi_rm_and_scen_res._multi_scen_key[0] == multi_scen_res._multi_scen_key[0] == curvescen1
-
-    # test futures
-    futures = r1.futures
-    assert len(futures) == 2
-    assert isinstance(futures[0], MultipleScenarioFuture)
-    assert isinstance(futures[0].result(), MultipleScenarioResult)
-
-
-def test_historical_multi_scenario(mocker):
-    with MockCalc(mocker):
-        with HistoricalPricingContext(dt.date(2020, 1, 14), dt.date(2020, 1, 15), market_data_location='LDN'):
-            with multiscenario:
-                res = Portfolio(swap_3).price()
-                res_multi_rm = Portfolio(swap_3).calc((risk.Price, risk.IRFwdRate))
-
-    default_pivot_table_test(res, with_dates='dated')
-    default_pivot_table_test(res_multi_rm, with_dates='dated')
-
-    # test slicing
-    date_res = res[dt.date(2020, 1, 14)]
-    assert all([isinstance(r, FloatWithInfo) for r in date_res.futures[0].result().values()])
-    date_res_2 = res_multi_rm[swap_3][risk.Price][dt.date(2020, 1, 14)]
-    assert all([isinstance(r, FloatWithInfo) for r in date_res_2.values()])
-
-    scen_slice_res = res[curvescen2]
-    assert all([isinstance(r, SeriesWithInfo) for r in scen_slice_res.futures[0].result().values()])
-    assert isinstance(res_multi_rm[swap_3][risk.Price][curvescen2], SeriesWithInfo)
-
-    # test futures
-    futures = res.futures
-    assert isinstance(futures[0], MultipleScenarioFuture)
-    assert isinstance(futures[0].result(), MultipleScenarioResult)
-
-
-def test_series_with_info_arithmetics(mocker):
-    series_info = SeriesWithInfo([2.0, 4.0], [dt.date(2021, 4, 11), dt.date(2022, 4, 11)])
-    scaled = series_info * 100
-    assert isinstance(scaled, SeriesWithInfo)
-    assert tuple(scaled.values) == (200.0, 400.0)
-
-
-def test_composite_multi_scenario(mocker):
-    with MockCalc(mocker):
-        c, res1, _ = get_attributes(usd_port, risk.Price, resolve=True, ctx='Composite')
-        c2, res2, _ = get_attributes(eur_port, (risk.Price, risk.IRFwdRate), resolve=True, ctx='Composite')
-
-    assert 'scenario' in c
-    assert 'scenario' in c2
-    assert 'risk_measure' in c2
-    assert len(res1.risk_measures) == 1
-    assert len(res2.risk_measures) == 2
-
-
-def test_one_portfolio(mocker):
-    with MockCalc(mocker):
-        _, r1, f1 = get_attributes(eur_port, risk.Price)
-        _, r2, f2 = get_attributes(eur_port, (risk.Price, risk.DollarPrice))
-        _, _, f3 = get_attributes(Portfolio(swap_1, name='swap_1'), (risk.Price, risk.DollarPrice))
-    price_values_test(r1, f1)
-    price_values_test(r2, f2)
-
-    default_pivot_table_test(r1)
-    default_pivot_table_test(r2)
-
-    # test slicing
-    # slice one risk measure
-    sub_r1 = r1[risk.Price]
-    assert sub_r1 == r1
-    # slice one instrument
-    sub_r2 = r2[swap_1].to_frame().values[0]
-    assert all(sub_r2 == f3['value'].values)
-
-    # test aggregate
-    agg_r1 = r1.aggregate().to_frame()
-    agg_r2 = r2.aggregate().to_frame().values[0]
-    assert agg_r1 == sum(f1['value'].values)
-    assert all(
-        agg_r2 == [sum(f2.loc[f2['risk_measure'] == rm]['value'].values) for rm in [risk.Price, risk.DollarPrice]]
-    )
-
-
-def test_dated_risk_values(mocker):
-    with MockCalc(mocker):
-        _, res1, frame1 = get_attributes(port, risk.Price, 'Multiple')
-        _, res2, frame2 = get_attributes(port1, (risk.DollarPrice, risk.Price), 'Multiple')
-        _, res3, frame3 = get_attributes(port1, risk.Price)
-        _, res4, frame4 = get_attributes(port1, (risk.DollarPrice, risk.Price))
-        _, res5, frame5 = get_attributes(gbp_port, (risk.DollarPrice, risk.Price), 'Multiple')
-        _, res6, frame6 = get_attributes(jpy_port, risk.Price, 'Multiple')
-
-    price_values_test(res1, frame1, 'dated')
-    price_values_test(res2, frame2, 'dated')
-    price_values_test(res5, frame5, 'dated')
-    price_values_test(res6, frame6, 'dated')
-
-    default_pivot_table_test(res1, 'dated')
-    default_pivot_table_test(res2, 'dated')
-    default_pivot_table_test(res5, 'dated')
-    default_pivot_table_test(res6, 'dated')
-
-    # test slicing
-    sub_res1 = res1[risk.Price]
-    assert sub_res1 == res1
-
-    # slice one date
-    slice_date_res2 = res2[dt.date(2020, 1, 14)]
-    assert all(slice_date_res2.to_frame(None, None, None) == frame4)
-    slice_date_res3 = slice_date_res2[risk.Price]
-    assert all(slice_date_res3.to_frame(None, None, None) == frame3)
-
-    # slice dates
-    slice_date_res2 = res2[[dt.date(2020, 1, 14), dt.date(2020, 1, 15)]]
-    assert all(slice_date_res2.to_frame(None, None, None) == frame2)
-
-    # test aggregate
-    agg_res5 = res5.aggregate().to_frame(None, None, None)
-
-    def filter_lambda(x):
-        return (x['risk_measure'] == risk.DollarPrice) & (x['dates'] == dt.date(2020, 1, 14))
-
-    manual_agg_r5 = frame5.loc[frame5.apply(filter_lambda, axis=1)]['value'].values.sum()
-    filter_agg_res5 = agg_res5.loc[agg_res5.apply(filter_lambda, axis=1)]['value'].values[0]
-    assert filter_agg_res5 == manual_agg_r5
-
-    sub_res6 = res6.aggregate().to_frame().loc[dt.date(2020, 1, 14)].values[0]
-    manual_agg_r6 = frame6.loc[frame6['dates'] == dt.date(2020, 1, 14)]['value'].values.sum()
-    assert sub_res6 == manual_agg_r6
-
-
-def test_bucketed_risks(mocker):
-    with MockCalc(mocker):
-        _, res1, frame1 = get_attributes(eur_port, risk.IRDelta)
-        _, res2, frame2 = get_attributes(port, risk.IRDelta)
-        _, res3, frame3 = get_attributes(gbp_port, risk.IRDelta)
-        _, res4, frame4 = get_attributes(port1, risk.IRDelta, 'Multiple')
-        _, res5, frame5 = get_attributes(bs_port, risk.IRBasis(aggregation_level=AggregationLevel.Asset))
-        _, res6, frame6 = get_attributes(jpy_port, risk.IRBasis(aggregation_level=AggregationLevel.Asset), 'Multiple')
-        _, res7, frame7 = get_attributes(commod_port, risk.CommodDelta, "Multiple")
-
-    def check_depth(res, f, with_dates=''):
-        temp_res = list(res)[0].drop('value', axis=1)
-        port_depth = len(max(res.portfolio.all_paths, key=len)) + temp_res.columns.size
-        port_depth = port_depth + 2 if with_dates == 'dated' else port_depth + 1
-        f_temp = f.drop('value', axis=1)
-        assert port_depth == f_temp.columns.size
-
-    check_depth(res1, frame1)
-    check_depth(res2, frame2)
-    check_depth(res3, frame3)
-    check_depth(res4, frame4, 'dated')
-    check_depth(res5, frame5)
-    check_depth(res6, frame6, 'dated')
-    check_depth(res7, frame7, 'dated')
-
-    default_pivot_table_test(res1, 'has_bucketed')
-    default_pivot_table_test(res2, 'has_bucketed')
-    default_pivot_table_test(res3, 'has_bucketed')
-    default_pivot_table_test(res4, 'has_bucketed')
-    default_pivot_table_test(res5, 'has_bucketed')
-    default_pivot_table_test(res6, 'has_bucketed')
-    default_pivot_table_test(res7, 'has_bucketed')
-
-    # test slicing
-    # slice one portfolio
-    sub_res2 = res2[gbp_port]
-    assert all(sub_res2.to_frame() == res1.to_frame())
-
-    # slice one date
-    sub_res4 = res4[dt.date(2020, 1, 14)]
-    assert all(sub_res4[gbp_port].to_frame(None, None, None) == frame3)
-    # slice dates
-    sub_res4b = res4[[dt.date(2020, 1, 14), dt.date(2020, 1, 15)]]
-    assert all(sub_res4b.to_frame(None, None, None) == frame4)
-
-    # test aggregate
-    agg_r1 = res1.aggregate().to_frame()
-    manual_agg_f1 = frame1.loc[frame1['mkt_point'] == '5Y']['value'].sum()
-    np.testing.assert_almost_equal(agg_r1.loc[agg_r1['mkt_point'] == '5Y']['value'].values[0], manual_agg_f1, 8)
-
-    def filter_lambda(x):
-        return (x['dates'] == dt.date(2020, 1, 14)) & (x['mkt_asset'] == 'JPY OIS/JPY-3M')
-
-    agg_r6 = res6.aggregate().to_frame()
-    filter_agg_r6 = agg_r6.loc[agg_r6.apply(filter_lambda, axis=1)]['value'].values[0]
-    manual_agg_f6 = frame6.loc[frame6.apply(filter_lambda, axis=1)]['value'].values.sum()
-    np.testing.assert_almost_equal(filter_agg_r6, manual_agg_f6, 8)
-
-    assert isinstance(res7[dt.date(2020, 1, 14)].result().futures[0].result(), DataFrameWithInfo)
-    assert res7[dt.date(2020, 1, 14)].to_frame()["mkt_type"].iloc[0] == "CMD NRG"
-
-
-def test_cashflows_risk(mocker):
-    with MockCalc(mocker):
-        _, _, frame1 = get_attributes(eur_port, risk.Cashflows)
-        _, _, frame2 = get_attributes(port1, risk.Cashflows)
-
-    assert 'payment_date' in frame1.columns.values
-    assert 'payment_date' in frame2.columns.values
-
-    assert np.unique(frame1.risk_measure.values)[0] == risk.Cashflows
-    assert np.unique(frame2.risk_measure.values)[0] == risk.Cashflows
-
-    assert 'instrument_name' in frame1.columns.values
-    assert 'instrument_name' in frame2.columns.values
-    assert 'portfolio_name_0' in frame2.columns.values
-
-
-def test_nested_portfolio(mocker):
-    with MockCalc(mocker):
-        cols1, res1, frame1 = get_attributes(port1, (risk.DollarPrice, risk.Price))
-        cols2, res2, frame2 = get_attributes(port, (risk.DollarPrice, risk.Price))
-        _, swap1_6_res, frame3 = get_attributes(Portfolio((swap_1, swap_6), name='swap_1_6'), risk.DollarPrice)
-        _, res4, frame4 = get_attributes(port1, (risk.DollarPrice, risk.Price, risk.Theta))
-
-    price_values_test(res1, frame1)
-    price_values_test(res2, frame2)
-    dollar_eur_frame1 = frame1[(frame1['portfolio_name_0'] == 'EUR') & (frame1['risk_measure'] == risk.DollarPrice)][
-        'value'
-    ].values
-    dollar_eur_frame2 = frame2[
-        (frame2['portfolio_name_0'] == 'EURGBP')
-        & (frame2['portfolio_name_1'] == 'EUR')
-        & (frame2['risk_measure'] == risk.DollarPrice)
-    ]['value'].values
-
-    default_pivot_table_test(res1)
-    default_pivot_table_test(res2)
-
-    # test slicing
-    # slice multiple instruments
-    slice_res2 = res1[[swap_1, swap_6]][risk.DollarPrice].to_frame(None, None, None)['value'].values
-    assert all(slice_res2 == swap1_6_res.to_frame(None, None, None)['value'].values)
-
-    sub_frame1 = res1[risk.DollarPrice][swap_1].to_frame()
-    assert sub_frame1 == dollar_eur_frame1[0]
-    assert sub_frame1 == dollar_eur_frame2[0]
-
-    sub_frame2 = res2[eur_port][risk.DollarPrice].to_frame(None, None, None)['value'].values
-    assert all(dollar_eur_frame1 == sub_frame2)
-    assert all(dollar_eur_frame2 == sub_frame2)
-    # slice multiple risk measures
-    sub_res4 = res4[[risk.Price, risk.DollarPrice]]
-    assert all(sub_res4.to_frame() == res1.to_frame())
-
-
-def test_diff_types_risk_measures(mocker):
-    # when risk results from scalar and bucketed risk measures are be to tabulated together
-    with MockCalc(mocker):
-        _, res1, frame1 = get_attributes(eur_port, (risk.Price, risk.IRDelta))
-        _, res2, frame2 = get_attributes(mixed_port, (risk.IRBasis, risk.Price))
-        _, res3, frame3 = get_attributes(
-            mixed_port, (risk.IRBasis(aggregation_level=AggregationLevel.Asset), risk.Price)
+from gs_quant.target.common import RiskMeasureType, RiskRequestParameters
+
+
+# ---------------------------------------------------------------------------
+# Shared objects for building consistent RiskKeys.
+# Using the same market, params, and scenario ensures that
+# _risk_keys_compatible and composition_info work correctly.
+# ---------------------------------------------------------------------------
+
+_SHARED_MARKET = CloseMarket(date=dt.date(2020, 1, 1), location='NYC')
+_SHARED_PARAMS = RiskRequestParameters()
+_SHARED_SCENARIO = None  # No scenario
+
+
+def _risk_key(date=None, measure_name='DollarPrice', measure_type=RiskMeasureType.Dollar_Price):
+    date = date or dt.date(2020, 1, 1)
+    rm = RiskMeasure(name=measure_name, measure_type=measure_type)
+    return RiskKey('GS', date, _SHARED_MARKET, _SHARED_PARAMS, _SHARED_SCENARIO, rm)
+
+
+def _float_with_info(value=100.0, date=None, measure_name='DollarPrice',
+                     measure_type=RiskMeasureType.Dollar_Price):
+    rk = _risk_key(date=date, measure_name=measure_name, measure_type=measure_type)
+    return FloatWithInfo(rk, value)
+
+
+def _series_with_info(values=None, dates=None, measure_name='DollarPrice',
+                      measure_type=RiskMeasureType.Dollar_Price):
+    if values is None:
+        values = [1.0, 2.0]
+    if dates is None:
+        dates = [dt.date(2020, 1, 1), dt.date(2020, 1, 2)]
+    rk = _risk_key(date=dates[0], measure_name=measure_name, measure_type=measure_type)
+    return SeriesWithInfo(pd.Series(values, index=dates), risk_key=rk)
+
+
+def _make_rm(name='DollarPrice', measure_type=RiskMeasureType.Dollar_Price):
+    return RiskMeasure(name=name, measure_type=measure_type)
+
+
+# ---------------------------------------------------------------------------
+# PricingFuture
+# ---------------------------------------------------------------------------
+
+class TestPricingFuture:
+    def test_create_with_result(self):
+        f = PricingFuture(42.0)
+        assert f.done()
+        assert f.result() == 42.0
+
+    def test_create_with_none_result(self):
+        f = PricingFuture(None)
+        assert f.done()
+        assert f.result() is None
+
+    def test_create_without_result_not_done(self):
+        """PricingFuture() without args should not be done (uses default PricingContext)."""
+        f = PricingFuture()
+        assert not f.done()
+
+    def test_set_result_then_done(self):
+        f = PricingFuture()
+        f.set_result(99.0)
+        assert f.done()
+        assert f.result() == 99.0
+
+    def test_result_raises_when_context_is_entered(self):
+        from gs_quant.markets import PricingContext
+        with PricingContext():
+            f = PricingFuture()
+            with pytest.raises(RuntimeError, match='Cannot evaluate results under the same pricing context'):
+                f.result(timeout=0)
+
+    def test_add_with_float_raises(self):
+        """Adding a raw float to PricingFuture(FloatWithInfo) triggers _compose which
+        does not support (ScalarWithInfo, float) -- it raises RuntimeError."""
+        fwi = _float_with_info(100.0)
+        f = PricingFuture(fwi)
+        with pytest.raises(RuntimeError):
+            _ = f + 5.0
+
+    def test_add_with_another_pricing_future_same_date(self):
+        fwi1 = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        fwi2 = _float_with_info(200.0, date=dt.date(2020, 1, 1))
+        f1 = PricingFuture(fwi1)
+        f2 = PricingFuture(fwi2)
+        result = f1 + f2
+        assert isinstance(result, PricingFuture)
+        assert result.done()
+
+    def test_add_with_another_pricing_future_diff_date(self):
+        fwi1 = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        fwi2 = _float_with_info(200.0, date=dt.date(2020, 1, 2))
+        f1 = PricingFuture(fwi1)
+        f2 = PricingFuture(fwi2)
+        result = f1 + f2
+        assert isinstance(result, PricingFuture)
+        assert isinstance(result.result(), SeriesWithInfo)
+
+    def test_add_with_invalid_type(self):
+        fwi = _float_with_info(100.0)
+        f = PricingFuture(fwi)
+        with pytest.raises((ValueError, AttributeError)):
+            _ = f + "invalid"
+
+    def test_mul_with_float(self):
+        fwi = _float_with_info(100.0)
+        f = PricingFuture(fwi)
+        result = f * 2.0
+        assert isinstance(result, PricingFuture)
+        assert float(result.result()) == pytest.approx(200.0)
+
+    def test_mul_with_int(self):
+        fwi = _float_with_info(100.0)
+        f = PricingFuture(fwi)
+        result = f * 3
+        assert isinstance(result, PricingFuture)
+        assert float(result.result()) == pytest.approx(300.0)
+
+    def test_mul_with_invalid_type(self):
+        fwi = _float_with_info(100.0)
+        f = PricingFuture(fwi)
+        with pytest.raises(ValueError, match='Can only multiply by an int or float'):
+            _ = f * "invalid"
+
+    def test_done_callback(self):
+        f = PricingFuture()
+        callback_results = []
+        f.add_done_callback(lambda fut: callback_results.append(fut.result()))
+        f.set_result(42.0)
+        assert callback_results == [42.0]
+
+
+# ---------------------------------------------------------------------------
+# CompositeResultFuture
+# ---------------------------------------------------------------------------
+
+class TestCompositeResultFuture:
+    def test_all_futures_done(self):
+        f1 = PricingFuture(10)
+        f2 = PricingFuture(20)
+        crf = CompositeResultFuture([f1, f2])
+        assert crf.done()
+        assert crf.result() == [10, 20]
+
+    def test_getitem(self):
+        f1 = PricingFuture(10)
+        f2 = PricingFuture(20)
+        crf = CompositeResultFuture([f1, f2])
+        assert crf[0] == 10
+        assert crf[1] == 20
+
+    def test_futures_property(self):
+        f1 = PricingFuture(10)
+        f2 = PricingFuture(20)
+        crf = CompositeResultFuture([f1, f2])
+        assert crf.futures == (f1, f2)
+
+    def test_pending_futures_resolved_via_callback(self):
+        f1 = PricingFuture()
+        f2 = PricingFuture()
+        crf = CompositeResultFuture([f1, f2])
+        assert not crf.done()
+
+        f1.set_result(10)
+        assert not crf.done()
+
+        f2.set_result(20)
+        assert crf.done()
+        assert crf.result() == [10, 20]
+
+    def test_single_pending_future(self):
+        f1 = PricingFuture()
+        f2 = PricingFuture(20)
+        crf = CompositeResultFuture([f1, f2])
+        assert not crf.done()
+
+        f1.set_result(10)
+        assert crf.done()
+        assert crf.result() == [10, 20]
+
+    def test_empty_futures_list(self):
+        crf = CompositeResultFuture([])
+        assert crf.done()
+        assert crf.result() == []
+
+
+# ---------------------------------------------------------------------------
+# MultipleRiskMeasureResult
+# ---------------------------------------------------------------------------
+
+class TestMultipleRiskMeasureResult:
+    def test_basic_creation(self):
+        rm1 = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        rm2 = _make_rm('Price', RiskMeasureType.PV)
+        instrument = MagicMock()
+        fwi1 = _float_with_info(100.0)
+        fwi2 = _float_with_info(200.0, measure_name='Price', measure_type=RiskMeasureType.PV)
+        result = MultipleRiskMeasureResult(instrument, {rm1: fwi1, rm2: fwi2})
+        assert rm1 in result
+        assert result[rm1] == fwi1
+        assert result[rm2] == fwi2
+
+    def test_instrument_property(self):
+        instrument = MagicMock()
+        result = MultipleRiskMeasureResult(instrument, {})
+        assert result.instrument is instrument
+
+    def test_dates_empty(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        assert result.dates == ()
+
+    def test_dates_with_series(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        swi = _series_with_info([1.0, 2.0], [dt.date(2020, 1, 1), dt.date(2020, 1, 2)])
+        result = MultipleRiskMeasureResult(instrument, {rm: swi})
+        assert dt.date(2020, 1, 1) in result.dates
+        assert dt.date(2020, 1, 2) in result.dates
+
+    def test_dates_with_series_non_date_index(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        rk = _risk_key()
+        swi = SeriesWithInfo(pd.Series([1.0, 2.0], index=['a', 'b']), risk_key=rk)
+        result = MultipleRiskMeasureResult(instrument, {rm: swi})
+        assert result.dates == ()
+
+    def test_mul_with_float(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        scaled = result * 2.0
+        assert isinstance(scaled, MultipleRiskMeasureResult)
+        assert float(scaled[rm]) == pytest.approx(200.0)
+
+    def test_mul_with_int(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        scaled = result * 3
+        assert isinstance(scaled, MultipleRiskMeasureResult)
+        assert float(scaled[rm]) == pytest.approx(300.0)
+
+    def test_mul_with_invalid_type(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        val = result * "invalid"
+        assert isinstance(val, ValueError)
+
+    def test_add_with_float(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        added = result + 5.0
+        assert isinstance(added, MultipleRiskMeasureResult)
+        assert float(added[rm]) == pytest.approx(105.0)
+
+    def test_add_with_int(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        added = result + 5
+        assert isinstance(added, MultipleRiskMeasureResult)
+        assert float(added[rm]) == pytest.approx(105.0)
+
+    def test_add_invalid_type_raises(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        with pytest.raises(ValueError, match='Can only add instances'):
+            _ = result + "bad"
+
+    def test_getitem_with_risk_measure_key(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        assert result[rm] == fwi
+
+    def test_getitem_with_date_on_non_historical_raises(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        with pytest.raises(ValueError, match='Can only index by date on historical results'):
+            _ = result[dt.date(2020, 1, 1)]
+
+    def test_getitem_with_date_on_series(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        swi = _series_with_info([1.0, 2.0], [dt.date(2020, 1, 1), dt.date(2020, 1, 2)])
+        result = MultipleRiskMeasureResult(instrument, {rm: swi})
+        sliced = result[dt.date(2020, 1, 1)]
+        assert isinstance(sliced, MultipleRiskMeasureResult)
+
+    def test_getitem_with_dates_iterable_on_series(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        swi = _series_with_info([1.0, 2.0], [dt.date(2020, 1, 1), dt.date(2020, 1, 2)])
+        result = MultipleRiskMeasureResult(instrument, {rm: swi})
+        sliced = result[[dt.date(2020, 1, 1), dt.date(2020, 1, 2)]]
+        assert isinstance(sliced, MultipleRiskMeasureResult)
+
+    def test_getitem_with_scenario_on_non_scenario_raises(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        mock_scenario = MagicMock(spec=Scenario)
+        with pytest.raises(ValueError, match='Can only index by scenario on multiple scenario results'):
+            _ = result[mock_scenario]
+
+    def test_getitem_with_scenario_on_scenario_result(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        scen = MagicMock(spec=Scenario)
+        inner_val = _float_with_info(100.0)
+        msr = MultipleScenarioResult(instrument, {scen: inner_val})
+        result = MultipleRiskMeasureResult(instrument, {rm: msr})
+        sliced = result[scen]
+        assert isinstance(sliced, MultipleRiskMeasureResult)
+
+    def test_getitem_with_date_on_scenario_results(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        scen = MagicMock(spec=Scenario)
+        swi = _series_with_info([1.0, 2.0], [dt.date(2020, 1, 1), dt.date(2020, 1, 2)])
+        msr = MultipleScenarioResult(instrument, {scen: swi})
+        result = MultipleRiskMeasureResult(instrument, {rm: msr})
+        sliced = result[dt.date(2020, 1, 1)]
+        assert isinstance(sliced, MultipleRiskMeasureResult)
+
+    def test_multi_scen_key_empty(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        result = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        assert result._multi_scen_key == ()
+
+    def test_multi_scen_key_with_scenario_values(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        scen = MagicMock(spec=Scenario)
+        inner_val = _float_with_info(100.0)
+        msr = MultipleScenarioResult(instrument, {scen: inner_val})
+        result = MultipleRiskMeasureResult(instrument, {rm: msr})
+        assert scen in result._multi_scen_key
+
+    def test_op_with_empty_series(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        rk = _risk_key()
+        swi = SeriesWithInfo(pd.Series([], dtype=float), risk_key=rk)
+        result = MultipleRiskMeasureResult(instrument, {rm: swi})
+        scaled = result * 2.0
+        assert isinstance(scaled, MultipleRiskMeasureResult)
+
+    def test_add_same_instrument_non_overlapping_measures(self):
+        rm1 = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        rm2 = _make_rm('Price', RiskMeasureType.PV)
+        instrument = MagicMock()
+        fwi1 = _float_with_info(100.0)
+        fwi2 = _float_with_info(200.0, measure_name='Price', measure_type=RiskMeasureType.PV)
+        mr1 = MultipleRiskMeasureResult(instrument, {rm1: fwi1})
+        mr2 = MultipleRiskMeasureResult(instrument, {rm2: fwi2})
+        combined = mr1 + mr2
+        assert isinstance(combined, MultipleRiskMeasureResult)
+        assert rm1 in combined
+        assert rm2 in combined
+
+    def test_add_different_instruments(self):
+        rm = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        inst1 = MagicMock()
+        inst2 = MagicMock()
+        inst1.__eq__ = lambda s, o: s is o
+        inst2.__eq__ = lambda s, o: s is o
+        fwi1 = _float_with_info(100.0)
+        fwi2 = _float_with_info(200.0)
+        mr1 = MultipleRiskMeasureResult(inst1, {rm: fwi1})
+        mr2 = MultipleRiskMeasureResult(inst2, {rm: fwi2})
+        combined = mr1 + mr2
+        assert isinstance(combined, PortfolioRiskResult)
+
+    def test_add_overlapping_raises(self):
+        rm = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        instrument = MagicMock()
+        fwi1 = _float_with_info(100.0)
+        fwi2 = _float_with_info(200.0)
+        mr1 = MultipleRiskMeasureResult(instrument, {rm: fwi1})
+        mr2 = MultipleRiskMeasureResult(instrument, {rm: fwi2})
+        with pytest.raises(ValueError):
+            _ = mr1 + mr2
+
+    def test_add_same_instrument_non_overlapping_dates(self):
+        rm = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        instrument = MagicMock()
+        swi1 = _series_with_info([100.0], [dt.date(2020, 1, 1)])
+        swi2 = _series_with_info([200.0], [dt.date(2020, 1, 2)])
+        mr1 = MultipleRiskMeasureResult(instrument, {rm: swi1})
+        mr2 = MultipleRiskMeasureResult(instrument, {rm: swi2})
+        combined = mr1 + mr2
+        assert isinstance(combined, MultipleRiskMeasureResult)
+
+
+# ---------------------------------------------------------------------------
+# MultipleRiskMeasureFuture
+# ---------------------------------------------------------------------------
+
+class TestMultipleRiskMeasureFuture:
+    def test_creation_with_done_futures(self):
+        rm1 = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        rm2 = _make_rm('Price', RiskMeasureType.PV)
+        instrument = MagicMock()
+        f1 = PricingFuture(_float_with_info(100.0))
+        f2 = PricingFuture(_float_with_info(200.0, measure_name='Price', measure_type=RiskMeasureType.PV))
+        mrf = MultipleRiskMeasureFuture(instrument, {rm1: f1, rm2: f2})
+        assert mrf.done()
+        result = mrf.result()
+        assert isinstance(result, MultipleRiskMeasureResult)
+        assert float(result[rm1]) == pytest.approx(100.0)
+        assert float(result[rm2]) == pytest.approx(200.0)
+
+    def test_measures_to_futures_property(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        f = PricingFuture(_float_with_info(100.0))
+        mrf = MultipleRiskMeasureFuture(instrument, {rm: f})
+        assert rm in mrf.measures_to_futures
+        assert mrf.measures_to_futures[rm] is f
+
+    def test_add_two_futures(self):
+        rm1 = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        rm2 = _make_rm('Price', RiskMeasureType.PV)
+        instrument = MagicMock()
+        f1 = PricingFuture(_float_with_info(100.0))
+        f2 = PricingFuture(_float_with_info(200.0, measure_name='Price', measure_type=RiskMeasureType.PV))
+        mrf1 = MultipleRiskMeasureFuture(instrument, {rm1: f1})
+        mrf2 = MultipleRiskMeasureFuture(instrument, {rm2: f2})
+        combined = mrf1 + mrf2
+        assert isinstance(combined, MultipleRiskMeasureFuture)
+
+    def test_pending_future_resolution(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        f = PricingFuture()
+
+        mrf = MultipleRiskMeasureFuture(instrument, {rm: f})
+        assert not mrf.done()
+
+        f.set_result(_float_with_info(100.0))
+        assert mrf.done()
+        result = mrf.result()
+        assert isinstance(result, MultipleRiskMeasureResult)
+
+    def test_add_with_non_future(self):
+        """When other is not a MultipleRiskMeasureFuture, result is used as-is."""
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        f = PricingFuture(fwi)
+        mrf = MultipleRiskMeasureFuture(instrument, {rm: f})
+        # Passing a non-MRMF triggers the else branch
+        other = MultipleRiskMeasureResult(instrument, {rm: _float_with_info(200.0)})
+        combined = mrf + other
+        assert isinstance(combined, MultipleRiskMeasureFuture)
+
+
+# ---------------------------------------------------------------------------
+# MultipleScenarioResult
+# ---------------------------------------------------------------------------
+
+class TestMultipleScenarioResult:
+    def test_basic_creation(self):
+        instrument = MagicMock()
+        scen1 = MagicMock(spec=Scenario)
+        scen2 = MagicMock(spec=Scenario)
+        val1 = _float_with_info(100.0)
+        val2 = _float_with_info(200.0)
+        msr = MultipleScenarioResult(instrument, {scen1: val1, scen2: val2})
+        assert msr[scen1] == val1
+        assert msr[scen2] == val2
+
+    def test_instrument_property(self):
+        instrument = MagicMock()
+        msr = MultipleScenarioResult(instrument, {})
+        assert msr.instrument is instrument
+
+    def test_scenarios_property(self):
+        instrument = MagicMock()
+        scen1 = MagicMock(spec=Scenario)
+        scen2 = MagicMock(spec=Scenario)
+        msr = MultipleScenarioResult(instrument, {scen1: 1, scen2: 2})
+        assert scen1 in msr.scenarios
+        assert scen2 in msr.scenarios
+
+    def test_getitem_date_on_non_historical_raises(self):
+        instrument = MagicMock()
+        scen = MagicMock(spec=Scenario)
+        val = _float_with_info(100.0)
+        msr = MultipleScenarioResult(instrument, {scen: val})
+        with pytest.raises(ValueError, match='Can only index by date on historical results'):
+            _ = msr[dt.date(2020, 1, 1)]
+
+    def test_getitem_date_on_historical(self):
+        instrument = MagicMock()
+        scen = MagicMock(spec=Scenario)
+        swi = _series_with_info([1.0, 2.0], [dt.date(2020, 1, 1), dt.date(2020, 1, 2)])
+        msr = MultipleScenarioResult(instrument, {scen: swi})
+        sliced = msr[dt.date(2020, 1, 1)]
+        assert isinstance(sliced, MultipleScenarioResult)
+
+    def test_getitem_regular_key(self):
+        instrument = MagicMock()
+        scen = MagicMock(spec=Scenario)
+        val = _float_with_info(100.0)
+        msr = MultipleScenarioResult(instrument, {scen: val})
+        assert msr[scen] == val
+
+
+# ---------------------------------------------------------------------------
+# MultipleScenarioFuture
+# ---------------------------------------------------------------------------
+
+class TestMultipleScenarioFuture:
+    def test_set_result_non_historical(self):
+        instrument = MagicMock()
+        scen1 = MagicMock(spec=Scenario)
+        scen2 = MagicMock(spec=Scenario)
+        rk = _risk_key()
+
+        df = DataFrameWithInfo(
+            pd.DataFrame({
+                'label': ['scen1', 'scen2'],
+                'value': [100.0, 200.0],
+            }),
+            risk_key=rk,
+            unit=None,
+            error=None,
         )
-        _, res4, frame4 = get_attributes(eur_port, (risk.IRDelta, risk.Price), 'Multiple')
-        _, res5, frame5 = get_attributes(mixed_port, (risk.Price, risk.IRBasis), 'Multiple')
-        _, res6, frame6 = get_attributes(
-            mixed_port, (risk.IRBasis(aggregation_level=AggregationLevel.Asset), risk.Price), 'Multiple'
+        f = PricingFuture(df)
+        msf = MultipleScenarioFuture(instrument, [scen1, scen2], [f])
+        assert msf.done()
+        result = msf.result()
+        assert isinstance(result, MultipleScenarioResult)
+
+    def test_set_result_historical(self):
+        instrument = MagicMock()
+        scen1 = MagicMock(spec=Scenario)
+        scen2 = MagicMock(spec=Scenario)
+        rk = _risk_key()
+
+        dates = [dt.date(2020, 1, 1), dt.date(2020, 1, 1), dt.date(2020, 1, 2), dt.date(2020, 1, 2)]
+        df = DataFrameWithInfo(
+            pd.DataFrame({
+                'label': ['scen1', 'scen2', 'scen1', 'scen2'],
+                'value': [100.0, 200.0, 110.0, 210.0],
+            }, index=pd.Index(dates, name='date')),
+            risk_key=rk,
+            unit=None,
+            error=None,
         )
-
-    price_values_test(res1, frame1)
-    price_values_test(res2, frame2)
-    price_values_test(res3, frame3)
-    price_values_test(res4, frame4, 'dated')
-    price_values_test(res5, frame5, 'dated')
-    price_values_test(res6, frame6, 'dated')
-
-    default_pivot_table_test(res1, 'has_bucketed')
-    default_pivot_table_test(res2, 'has_bucketed')
-    default_pivot_table_test(res3, 'has_bucketed')
-    default_pivot_table_test(res4, 'has_bucketed')
-    default_pivot_table_test(res5, 'has_bucketed')
-    default_pivot_table_test(res6, 'has_bucketed')
-
-    # test aggregate
-    sub_res1 = res1.aggregate().to_frame()
-    assert all(sub_res1.loc[risk.IRDelta]['value'].values == res1[risk.IRDelta].aggregate().to_frame()['value'].values)
-    assert sub_res1.loc[risk.Price]['value'] == res1[risk.Price].aggregate().to_frame()
+        f = PricingFuture(df)
+        msf = MultipleScenarioFuture(instrument, [scen1, scen2], [f])
+        assert msf.done()
+        result = msf.result()
+        assert isinstance(result, MultipleScenarioResult)
 
 
-def test_empty_calc_request(mocker):
-    # when calc req is sent for rm that inst is insensitive to
-    with MockCalc(mocker):
-        _, r1, f1 = get_attributes(swap_port1, (risk.IRVega, risk.Price))
-        _, r2, f2 = get_attributes(swap_port2, (risk.IRVega(aggregation_level=AggregationLevel.Asset), risk.Price))
-        _, r3, f3 = get_attributes(
-            swap_port1, (risk.IRVega(aggregation_level=AggregationLevel.Asset, currency='local'), risk.Price)
+# ---------------------------------------------------------------------------
+# HistoricalPricingFuture
+# ---------------------------------------------------------------------------
+
+class TestHistoricalPricingFuture:
+    def test_all_errors(self):
+        rk = _risk_key()
+        err1 = ErrorValue(rk, 'error1')
+        err2 = ErrorValue(rk, 'error2')
+        f1 = PricingFuture(err1)
+        f2 = PricingFuture(err2)
+        hpf = HistoricalPricingFuture([f1, f2])
+        assert hpf.done()
+        assert isinstance(hpf.result(), ErrorValue)
+
+    def test_with_valid_scalar_results(self):
+        fwi1 = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        fwi2 = _float_with_info(200.0, date=dt.date(2020, 1, 2))
+        f1 = PricingFuture(fwi1)
+        f2 = PricingFuture(fwi2)
+        hpf = HistoricalPricingFuture([f1, f2])
+        assert hpf.done()
+        result = hpf.result()
+        assert isinstance(result, SeriesWithInfo)
+
+    def test_with_multiple_risk_measure_results(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi1 = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        fwi2 = _float_with_info(200.0, date=dt.date(2020, 1, 2))
+        mr1 = MultipleRiskMeasureResult(instrument, {rm: fwi1})
+        mr2 = MultipleRiskMeasureResult(instrument, {rm: fwi2})
+        f1 = PricingFuture(mr1)
+        f2 = PricingFuture(mr2)
+        hpf = HistoricalPricingFuture([f1, f2])
+        assert hpf.done()
+        result = hpf.result()
+        assert isinstance(result, MultipleRiskMeasureResult)
+
+    def test_mixed_error_and_valid(self):
+        rk = _risk_key()
+        err = ErrorValue(rk, 'error')
+        fwi = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        f1 = PricingFuture(err)
+        f2 = PricingFuture(fwi)
+        hpf = HistoricalPricingFuture([f1, f2])
+        assert hpf.done()
+
+    def test_single_error(self):
+        rk = _risk_key()
+        err = ErrorValue(rk, 'error1')
+        f1 = PricingFuture(err)
+        hpf = HistoricalPricingFuture([f1])
+        assert hpf.done()
+        result = hpf.result()
+        assert isinstance(result, ErrorValue)
+
+
+# ---------------------------------------------------------------------------
+# PortfolioPath
+# ---------------------------------------------------------------------------
+
+class TestPortfolioPath:
+    def test_creation_with_int(self):
+        pp = PortfolioPath(0)
+        assert len(pp) == 1
+
+    def test_creation_with_tuple(self):
+        pp = PortfolioPath((0, 1))
+        assert len(pp) == 2
+
+    def test_repr(self):
+        pp = PortfolioPath(0)
+        assert repr(pp) == '(0,)'
+
+    def test_iter(self):
+        pp = PortfolioPath((0, 1, 2))
+        assert list(pp) == [0, 1, 2]
+
+    def test_add(self):
+        pp1 = PortfolioPath(0)
+        pp2 = PortfolioPath(1)
+        combined = pp1 + pp2
+        assert list(combined) == [0, 1]
+        assert len(combined) == 2
+
+    def test_eq(self):
+        pp1 = PortfolioPath((0, 1))
+        pp2 = PortfolioPath((0, 1))
+        pp3 = PortfolioPath((0, 2))
+        assert pp1 == pp2
+        assert pp1 != pp3
+
+    def test_hash(self):
+        pp1 = PortfolioPath((0, 1))
+        pp2 = PortfolioPath((0, 1))
+        assert hash(pp1) == hash(pp2)
+        s = {pp1, pp2}
+        assert len(s) == 1
+
+    def test_path_property(self):
+        pp = PortfolioPath((0, 1))
+        assert pp.path == (0, 1)
+
+    def test_call_on_composite_result(self):
+        f1 = PricingFuture(10)
+        f2 = PricingFuture(20)
+        crf = CompositeResultFuture([f1, f2])
+        pp = PortfolioPath(0)
+        result = pp(crf)
+        assert result is f1
+
+    def test_call_with_rename_to_parent(self):
+        f1 = PricingFuture(10)
+        f2 = PricingFuture(20)
+        crf = CompositeResultFuture([f1, f2])
+        pp = PortfolioPath(0)
+        result = pp(crf, rename_to_parent=True)
+        assert result is f1
+
+    def test_call_deep_path(self):
+        """Deep path through nested CompositeResultFutures."""
+        inner_f1 = PricingFuture(100)
+        inner_f2 = PricingFuture(200)
+        inner_crf = CompositeResultFuture([inner_f1, inner_f2])
+
+        outer_f = PricingFuture(300)
+        outer_crf = CompositeResultFuture([inner_crf, outer_f])
+
+        # Path (0, 1): outer.futures[0] = inner_crf (a PricingFuture)
+        # inner_crf.result() = [100, 200], then [200] => 200
+        pp = PortfolioPath((0, 1))
+        result = pp(outer_crf)
+        assert result == 200
+
+    def test_call_on_list(self):
+        items = [10, 20, 30]
+        pp = PortfolioPath(1)
+        result = pp(items)
+        assert result == 20
+
+    def test_call_on_tuple(self):
+        items = (10, 20, 30)
+        pp = PortfolioPath(2)
+        result = pp(items)
+        assert result == 30
+
+
+# ---------------------------------------------------------------------------
+# PortfolioRiskResult
+# ---------------------------------------------------------------------------
+
+class TestPortfolioRiskResult:
+    def _make_simple_prr(self, rm=None, values=None):
+        from gs_quant.markets.portfolio import Portfolio
+        from gs_quant.instrument import IRSwap
+
+        rm = rm or _make_rm()
+        if values is None:
+            values = [100.0, 200.0]
+
+        instruments = [
+            IRSwap("Pay", "5y", "EUR", fixed_rate=-0.005, name="swap_a"),
+            IRSwap("Pay", "10y", "EUR", fixed_rate=-0.005, name="swap_b"),
+        ]
+        portfolio = Portfolio(instruments, name="test_port")
+        futures = [
+            MultipleRiskMeasureFuture(inst, {rm: PricingFuture(_float_with_info(val))})
+            for inst, val in zip(instruments, values)
+        ]
+        return PortfolioRiskResult(portfolio, (rm,), futures)
+
+    def test_basic_creation(self):
+        prr = self._make_simple_prr()
+        assert prr.done()
+
+    def test_len(self):
+        prr = self._make_simple_prr()
+        assert len(prr) == 2
+
+    def test_risk_measures_property(self):
+        rm = _make_rm()
+        prr = self._make_simple_prr(rm=rm)
+        assert rm in prr.risk_measures
+
+    def test_portfolio_property(self):
+        prr = self._make_simple_prr()
+        assert prr.portfolio is not None
+        assert prr.portfolio.name == "test_port"
+
+    def test_result_returns_self(self):
+        prr = self._make_simple_prr()
+        assert prr.result() is prr
+
+    def test_iter(self):
+        prr = self._make_simple_prr()
+        items = list(prr)
+        assert len(items) == 2
+
+    def test_repr(self):
+        prr = self._make_simple_prr()
+        r = repr(prr)
+        assert 'Results' in r
+        assert 'test_port' in r
+        assert '(2)' in r
+
+    def test_repr_unnamed_portfolio(self):
+        from gs_quant.markets.portfolio import Portfolio
+        from gs_quant.instrument import IRSwap
+        rm = _make_rm()
+        instruments = [IRSwap("Pay", "5y", "EUR", fixed_rate=-0.005, name="s")]
+        portfolio = Portfolio(instruments)
+        futures = [MultipleRiskMeasureFuture(instruments[0], {rm: PricingFuture(_float_with_info(100.0))})]
+        prr = PortfolioRiskResult(portfolio, (rm,), futures)
+        r = repr(prr)
+        assert 'Results' in r
+
+    def test_contains_risk_measure(self):
+        rm = _make_rm()
+        prr = self._make_simple_prr(rm=rm)
+        assert rm in prr
+
+    def test_contains_risk_measure_not_present(self):
+        rm = _make_rm()
+        prr = self._make_simple_prr(rm=rm)
+        other_rm = _make_rm('Price', RiskMeasureType.PV)
+        assert other_rm not in prr
+
+    def test_contains_date_false(self):
+        prr = self._make_simple_prr()
+        assert dt.date(2020, 1, 1) not in prr
+
+    def test_contains_instrument(self):
+        prr = self._make_simple_prr()
+        instruments = list(prr.portfolio)
+        assert instruments[0] in prr
+
+    def test_getitem_by_index(self):
+        prr = self._make_simple_prr()
+        result = prr[0]
+        assert isinstance(result, FloatWithInfo)
+
+    def test_getitem_by_name(self):
+        prr = self._make_simple_prr()
+        result = prr['swap_a']
+        assert isinstance(result, FloatWithInfo)
+
+    def test_getitem_by_slice(self):
+        prr = self._make_simple_prr()
+        result = prr[0:1]
+        assert isinstance(result, PortfolioRiskResult)
+
+    def test_getitem_by_single_element_list(self):
+        prr = self._make_simple_prr()
+        result = prr[[0]]
+        assert isinstance(result, FloatWithInfo)
+
+    def test_getitem_by_risk_measure_single(self):
+        rm = _make_rm()
+        prr = self._make_simple_prr(rm=rm)
+        result = prr[rm]
+        assert result is prr
+
+    def test_getitem_by_risk_measure_not_computed(self):
+        rm = _make_rm()
+        prr = self._make_simple_prr(rm=rm)
+        other_rm = _make_rm('Price', RiskMeasureType.PV)
+        with pytest.raises(ValueError, match='not computed'):
+            _ = prr[other_rm]
+
+    def test_getitem_by_iterable_risk_measure_not_computed(self):
+        rm = _make_rm()
+        prr = self._make_simple_prr(rm=rm)
+        other_rm = _make_rm('Price', RiskMeasureType.PV)
+        with pytest.raises(ValueError, match='not computed'):
+            _ = prr[[rm, other_rm]]
+
+    def test_getitem_by_instrument_list(self):
+        prr = self._make_simple_prr()
+        instruments = list(prr.portfolio)
+        result = prr[instruments]
+        assert isinstance(result, PortfolioRiskResult)
+
+    def test_dates_empty_for_spot(self):
+        prr = self._make_simple_prr()
+        assert prr.dates == ()
+
+    def test_multi_scen_key_empty(self):
+        prr = self._make_simple_prr()
+        assert prr._multi_scen_key == ()
+
+    def test_get_with_valid_item(self):
+        prr = self._make_simple_prr()
+        result = prr.get(0, 'default')
+        assert result != 'default'
+
+    def test_get_with_invalid_item(self):
+        prr = self._make_simple_prr()
+        result = prr.get('nonexistent_name', 'default_val')
+        assert result == 'default_val'
+
+    def test_add_invalid_type_raises(self):
+        prr = self._make_simple_prr()
+        with pytest.raises(ValueError, match='Can only add instances'):
+            _ = prr + "bad"
+
+    def test_mul_with_invalid_type(self):
+        prr = self._make_simple_prr()
+        val = prr * "bad"
+        assert isinstance(val, ValueError)
+
+    def test_aggregate_single_measure(self):
+        prr = self._make_simple_prr()
+        agg = prr.aggregate(allow_mismatch_risk_keys=True)
+        assert isinstance(agg, float)
+
+    def test_subset(self):
+        prr = self._make_simple_prr()
+        paths = prr.portfolio.all_paths
+        sub = prr.subset([paths[0]], name='sub')
+        assert isinstance(sub, PortfolioRiskResult)
+
+    def test_transform_none(self):
+        prr = self._make_simple_prr()
+        assert prr.transform(None) is prr
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+class TestGetDefaultPivots:
+    def test_multiple_scenario_result_with_dates(self):
+        result = get_default_pivots('MultipleScenarioResult', has_dates=True, multi_measures=False, multi_scen=True)
+        assert result == ('value', 'scenario', 'dates')
+
+    def test_multiple_scenario_result_without_dates(self):
+        result = get_default_pivots('MultipleScenarioResult', has_dates=False, multi_measures=False, multi_scen=True)
+        assert result == ('value', 'scenario', None)
+
+    def test_multiple_risk_measure_result_with_scen(self):
+        result = get_default_pivots('MultipleRiskMeasureResult', has_dates=False, multi_measures=True, multi_scen=True)
+        assert result[1] == ('risk_measure', 'scenario')
+
+    def test_multiple_risk_measure_result_without_scen(self):
+        result = get_default_pivots('MultipleRiskMeasureResult', has_dates=False, multi_measures=True, multi_scen=False)
+        assert result[1] == 'risk_measure'
+
+    def test_multiple_risk_measure_result_with_dates(self):
+        result = get_default_pivots('MultipleRiskMeasureResult', has_dates=True, multi_measures=True, multi_scen=False)
+        assert result[2] == 'dates'
+
+    def test_multiple_risk_measure_result_without_dates(self):
+        result = get_default_pivots('MultipleRiskMeasureResult', has_dates=False, multi_measures=True, multi_scen=False)
+        assert result[2] is None
+
+    def test_portfolio_risk_result_requires_ori_cols(self):
+        with pytest.raises(ValueError, match='columns of dataframe required'):
+            get_default_pivots('PortfolioRiskResult', has_dates=False, multi_measures=False, multi_scen=False)
+
+    def test_portfolio_risk_result_with_dates_multi_measures(self):
+        ori_cols = ['instrument_name', 'risk_measure', 'value']
+        result = get_default_pivots(
+            'PortfolioRiskResult', has_dates=True, multi_measures=True, multi_scen=False,
+            ori_cols=ori_cols
         )
-        _, r4, f4 = get_attributes(swap_port2, (risk.Price, risk.IRVega(currency='local')))
-        _, r5, f5 = get_attributes(swap_port2, (risk.Price, risk.IRVega), 'Multiple')
-        _, r6, f6 = get_attributes(
-            swap_port1, (risk.IRVega(aggregation_level=AggregationLevel.Asset), risk.Price), 'Multiple'
+        assert result[0] == 'value'
+
+    def test_portfolio_risk_result_with_dates_single_measure(self):
+        ori_cols = ['instrument_name', 'risk_measure', 'value']
+        result = get_default_pivots(
+            'PortfolioRiskResult', has_dates=True, multi_measures=False, multi_scen=False,
+            ori_cols=ori_cols
         )
-        _, r7, f7 = get_attributes(
-            swap_port2,
-            (risk.IRVega(aggregation_level=AggregationLevel.Asset, currency='local'), risk.Price),
-            'Multiple',
+        assert result[0] == 'value'
+
+    def test_portfolio_risk_result_no_dates_no_multi_measures_simple_port_false(self):
+        ori_cols = ['instrument_name', 'risk_measure', 'value']
+        result = get_default_pivots(
+            'PortfolioRiskResult', has_dates=False, multi_measures=False, multi_scen=False,
+            simple_port=False, ori_cols=ori_cols
         )
-        _, r8, f8 = get_attributes(swap_port1, (risk.IRVega(currency='local'), risk.Price), 'Multiple')
+        assert result[0] == 'value'
 
-    price_values_test(r1, f1)
-    price_values_test(r2, f2)
-    price_values_test(r3, f3)
-    price_values_test(r4, f4)
-    price_values_test(r5, f5, 'dated')
-    price_values_test(r6, f6, 'dated')
-    price_values_test(r7, f7, 'dated')
-    price_values_test(r8, f8, 'dated')
-
-    default_pivot_table_test(r1, 'has_bucketed')
-    default_pivot_table_test(r2, 'has_bucketed')
-    default_pivot_table_test(r3, 'has_bucketed')
-    default_pivot_table_test(r4, 'has_bucketed')
-    default_pivot_table_test(r5, 'has_bucketed')
-    default_pivot_table_test(r6, 'has_bucketed')
-    default_pivot_table_test(r7, 'has_bucketed')
-    default_pivot_table_test(r8, 'has_bucketed')
-
-
-def test_adding_risk_results(mocker):
-    with MockCalc(mocker):
-        result1 = get_attributes(eur_port, risk.Price, no_frame=True)
-        result2 = get_attributes(
-            eur_port,
-            (risk.IRDelta(aggregation_level=AggregationLevel.Asset, currency='local'), risk.Price),
-            no_frame=True,
+    def test_portfolio_risk_result_no_dates_multi_measures(self):
+        ori_cols = ['instrument_name', 'risk_measure', 'value']
+        result = get_default_pivots(
+            'PortfolioRiskResult', has_dates=False, multi_measures=True, multi_scen=False,
+            ori_cols=ori_cols
         )
-        result3 = get_attributes(
-            swaption_port,
-            (risk.IRDelta(aggregation_level=AggregationLevel.Asset, currency='local'), risk.Price),
-            no_frame=True,
+        assert result[0] == 'value'
+
+    def test_portfolio_risk_result_multi_scen(self):
+        ori_cols = ['instrument_name', 'risk_measure', 'value', 'scenario']
+        result = get_default_pivots(
+            'PortfolioRiskResult', has_dates=True, multi_measures=True, multi_scen=True,
+            ori_cols=ori_cols
         )
-        result4 = get_attributes(port1, risk.Price, no_frame=True)
-        result5 = get_attributes(
-            swaption_port,
-            risk.IRVega(
-                aggregation_level=AggregationLevel.Asset,
-            ),
-            no_frame=True,
+        assert result[0] == 'value'
+
+        result = get_default_pivots(
+            'PortfolioRiskResult', has_dates=True, multi_measures=False, multi_scen=True,
+            ori_cols=ori_cols
         )
-        result6 = get_attributes(jpy_port, (risk.Price,), 'RollFwd', no_frame=True)
-        result7 = get_attributes(jpy_port, risk.Price, 'CurveScen1', no_frame=True)
-        result8 = get_attributes(jpy_port, (risk.DollarPrice, risk.Price), 'CurveScen2', no_frame=True)
+        assert result[0] == 'value'
 
-        # (2020, 1, 14) to (2020, 1, 15)
-        result9 = get_attributes(port1, risk.Price, 'Multiple', no_frame=True)
-        # (2020, 1, 16) to (2020, 1, 17)
-        result10 = get_attributes(port1, risk.Price, 'Multiple2', no_frame=True)
-        # (2020, 1, 14)
-        result11 = get_attributes(port1, risk.Price, no_frame=True)
-        # (2020, 1, 16), market_data_location='NYC'
-        result12 = get_attributes(port1, risk.Price, 'PricingCtx2', no_frame=True)
-        # (2020, 1, 16), market_data_location='LDN'
-        result13 = get_attributes(port1, risk.Price, 'PricingCtx3', no_frame=True)
-
-    # adding results with same portfolio but different risk measures
-    add_1 = result3 + result5
-    # adding results with different portfolio but same risk measures
-    add_2 = result2 + result3
-    # adding results with different portfolios and overlapping risk measures
-    add_3 = result1 + result3
-    # adding results with different portfolios and different risk measures
-    add_4 = result1 + result5
-    add_5 = result3 + result4
-
-    # adding dates
-
-    add_6 = result9 + result13
-    add_7 = result11 + result13
-    add_8 = result10 + result11
-    add_9 = result9 + result10
-
-    default_pivot_table_test(add_1, 'has_bucketed')
-    default_pivot_table_test(add_2, 'has_bucketed')
-    default_pivot_table_test(add_3, 'has_bucketed')
-    default_pivot_table_test(add_4, 'has_bucketed')
-    default_pivot_table_test(add_5, 'has_bucketed')
-    default_pivot_table_test(add_6, 'dated')
-    default_pivot_table_test(add_7, 'dated')
-    default_pivot_table_test(add_8, 'dated')
-    default_pivot_table_test(add_9, 'dated')
-
-    # throw value error when adding results where at least one particular value is being calculated twice
-
-    # adding results with same portfolio but overlapping risk measures
-    with pytest.raises(ValueError):
-        _ = result1 + result2
-
-    # adding results with overlapping portfolios and different risk measures
-    with pytest.raises(ValueError):
-        _ = result2 + result4
-
-    # adding results with overlapping portfolios and same risk measures
-    with pytest.raises(ValueError):
-        _ = result1 + result4
-
-    # adding results with different scenarios
-    with pytest.raises(ValueError):
-        _ = result6 + result7
-    with pytest.raises(ValueError):
-        _ = result7 + result8
-
-    # overlapping dates
-    with pytest.raises(ValueError):
-        _ = result9 + result11
-    with pytest.raises(ValueError):
-        _ = result10 + result13
-
-    # adding results with different market locations
-    with pytest.raises(ValueError):
-        _ = result10 + result12
-    with pytest.raises(ValueError):
-        _ = result9 + result12
-    with pytest.raises(ValueError):
-        _ = result12 + result13
-    with pytest.raises(ValueError):
-        _ = result11 + result12
-
-
-def test_unsupported_error_datums(mocker):
-    with MockCalc(mocker):
-        f1 = eur_port.calc(risk.IRAnnualImpliedVol).to_frame()
-        _, _, f2 = get_attributes(swap_port1, risk.IRAnnualImpliedVol)
-        _, _, f3 = get_attributes(swaption_port1, risk.IRAnnualImpliedVol)
-        _, _, f4 = get_attributes(swaption_port3, risk.IRAnnualImpliedVol)
-
-    # assert that unsupported datums do not appear to_frame()
-    assert f1 is None
-    assert all(f2['value'] == f3['value'])
-
-    # assert that errorvalue appears in to_frame()
-    assert isinstance(f4['value'].values[0], ErrorValue)
-
-
-def test_resolution_of_error_trade(mocker):
-    with MockCalc(mocker):
-        error_trade = IRSwap(notional_currency='EUR', termination_date='10y', fixed_rate='bob')
-        resolved_trade = error_trade.calc(ResolvedInstrumentValues)
-        assert isinstance(resolved_trade, ErrorValue)
-
-        try:
-            _ = resolved_trade.fixed_rate  # this should fail
-            assert 1 == 2
-        except AttributeError as e:
-            assert 'Error was' in str(e)
-
-
-def test_resolve_to_frame(mocker):
-    # makes sure resolving portfolio doesn't break to_frame
-    with MockCalc(mocker):
-        _, r1, f1 = get_attributes(eur_port, risk.Price, resolve=True)
-        _, r2, f2 = get_attributes(port1, risk.Price, resolve=True)
-        _, r3, f3 = get_attributes(jpy_port, risk.Price, 'RollFwd', resolve=True)
-        _, r4, f4 = get_attributes(port1, risk.Price, 'CurveScen1', resolve=True)
-
-
-def test_unnamed_portfolio(mocker):
-    unnamed_1 = Portfolio((swap_1, swap_2))
-    unnamed_2 = Portfolio((swap_3, swap_4))
-    unnamed = Portfolio((unnamed_1, unnamed_2))
-    with MockCalc(mocker):
-        res = unnamed.calc(risk.IRFwdRate)
-        df = res.to_frame()
-        assert len(df) == 2
-        assert list(df.index) == ['Portfolio_0', 'Portfolio_1']
-        assert list(df.columns) == ['5y', '10y']
-
-
-def test_leg_valuations(mocker):
-    with MockCalc(mocker):
-        # children legs return values
-        _, r1, f1 = get_attributes(mcb, risk.FXSpot)
-
-    assert isinstance(r1.futures[0].result(), DataFrameWithInfo)
-    assert 'path' in f1.columns
-
-
-def test_aggregation_with_heterogeous_types(mocker):
-    with MockCalc(mocker):
-        portfolio1 = Portfolio([IRSwaption('Pay', '10y', 'EUR', expiration_date='3m', name='EUR3m10ypayer')])
-        portfolio2 = Portfolio([IRSwaption('Pay', '10y', 'EUR', expiration_date='6m', name='EUR6m10ypayer')])
-
-        with PricingContext(csa_term='EUR-OIS', visible_to_gs=True):
-            r1 = portfolio1.price()
-        with PricingContext(csa_term='EUR-EuroSTR'):
-            r2 = portfolio2.price()
-
-        combined_result = r1 + r2
-
-    with pytest.raises(ValueError):
-        combined_result.aggregate()
-
-    assert isinstance(combined_result.aggregate(allow_mismatch_risk_keys=True), float)
-
-
-def test_aggregation_with_empty_measures(mocker):
-    with MockCalc(mocker):
-        swaptions = (
-            IRSwaption(
-                notional_currency='EUR',
-                termination_date='7y',
-                expiration_date='1y',
-                pay_or_receive='Receive',
-                strike='ATM+35',
-                name='EUR 1y7y',
-            ),
-            IRSwaption(
-                notional_currency='EUR',
-                termination_date='10y',
-                expiration_date='2w',
-                pay_or_receive='Receive',
-                strike='ATM+50',
-                name='EUR 2w10y',
-            ),
+        result = get_default_pivots(
+            'PortfolioRiskResult', has_dates=False, multi_measures=True, multi_scen=True,
+            ori_cols=ori_cols
         )
-        portfolio = Portfolio(swaptions)
+        assert result[0] == 'value'
 
-        from_date = dt.date(2021, 11, 18)
-        to_date = dt.date(2021, 11, 19)
-        explain_2d = PnlExplain(CloseMarket(date=to_date))
-
-        with PricingContext(pricing_date=from_date, visible_to_gs=True):
-            portfolio.resolve()
-            result_explain = portfolio.calc(explain_2d)
-
-        total_risk = aggregate_risk(result_explain[explain_2d])['value'].sum()
-        risk_swaption_1 = result_explain[0]['value'].sum()
-        risk_swaption_2 = result_explain[1]['value'].sum()
-
-        assert total_risk == risk_swaption_1 + risk_swaption_2
-
-
-def test_filter_risk(mocker):
-    with MockCalc(mocker):
-        result = swap_1.calc(risk.IRDelta)
-
-    coord = MarketDataCoordinate.from_string('IR_EUR_SWAP_5Y')
-
-    df = result.filter_by_coord(coord)
-    assert len(result) > 1
-    assert len(df) == 1
-
-
-def test_transformation(mocker):
-    with MockCalc(mocker):
-        ladder_res = usd_port.calc(risk.IRDelta)
-
-    transformed_res = ladder_res.transform(ResultWithInfoAggregator())
-    np.testing.assert_almost_equal(transformed_res.aggregate(), ladder_res.to_frame()['value'].sum())
-
-
-def test_aggregation_with_identical_trades(mocker):
-    with MockCalc(mocker):
-        swaptions = (
-            IRSwaption(
-                notional_currency='EUR',
-                termination_date='7y',
-                expiration_date='1y',
-                pay_or_receive='Receive',
-                strike='ATM+35',
-                name='trade_1',
-            ),
-            IRSwaption(
-                notional_currency='EUR',
-                termination_date='7y',
-                expiration_date='1y',
-                pay_or_receive='Receive',
-                strike='ATM+35',
-                name='trade_2',
-            ),
+        result = get_default_pivots(
+            'PortfolioRiskResult', has_dates=False, multi_measures=False, multi_scen=True,
+            ori_cols=ori_cols
         )
-        portfolio = Portfolio(swaptions)
-
-        delta = portfolio.calc(risk.IRDelta)
-        transformed_res = delta.transform(ResultWithInfoAggregator())
-        np.testing.assert_almost_equal(transformed_res.aggregate(), delta.to_frame()['value'].sum())
+        assert result[0] == 'value'
 
 
-def test_scalar_with_info_on_instrument():
-    # Historically there was a problem with setting risk results that were a scalar with info on an instrument
-    # This was because of how copy.deepcopy would try and pickle/unpickle the class. This test checks that we can set
-    # properties and still to_dict and _to_json the class
-    risk_key = RiskKey("provider", "the_date", "mkt", RiskRequestParameters(), None, None)
-    fwi = FloatWithInfo(
-        risk_key,
-        1.56,
-    )
-    swi = StringWithInfo(risk_key, 'USD')
+class TestPivotToFrame:
+    def test_basic_pivot(self):
+        df = pd.DataFrame({
+            'value': [1.0, 2.0, 3.0, 4.0],
+            'instrument': ['a', 'a', 'b', 'b'],
+            'measure': ['price', 'delta', 'price', 'delta'],
+        })
+        result = pivot_to_frame(df, 'value', 'instrument', 'measure', 'sum')
+        assert isinstance(result, pd.DataFrame)
+        assert result.loc['a', 'price'] == 1.0
 
-    swap = IRSwap(floating_rate_option=swi, fixed_rate=fwi)
-    swap_dict = swap.to_dict()
+    def test_pivot_with_no_index(self):
+        df = pd.DataFrame({
+            'value': [1.0, 2.0],
+            'measure': ['price', 'delta'],
+        })
+        result = pivot_to_frame(df, 'value', None, 'measure', 'sum')
+        assert isinstance(result, pd.DataFrame)
 
-    assert swap_dict["floatingRateOption"] == "USD"
-    assert swap_dict["fixedRate"] == 1.56
+    def test_pivot_with_no_columns(self):
+        df = pd.DataFrame({
+            'value': [1.0, 2.0],
+            'inst': ['a', 'b'],
+        })
+        result = pivot_to_frame(df, 'value', 'inst', None, 'sum')
+        assert isinstance(result, pd.DataFrame)
 
-    assert swap.to_json() is not None
+
+class TestGetValueWithInfo:
+    def test_error_value_passthrough(self):
+        rk = _risk_key()
+        ev = ErrorValue(rk, 'some error')
+        result = _get_value_with_info(ev, rk, None, None)
+        assert isinstance(result, ErrorValue)
+
+    def test_unsupported_value_passthrough(self):
+        rk = _risk_key()
+        uv = UnsupportedValue(rk)
+        result = _get_value_with_info(uv, rk, None, None)
+        assert isinstance(result, UnsupportedValue)
+
+    def test_dataframe_returns_dataframe_with_info(self):
+        rk = _risk_key()
+        df = pd.DataFrame({'a': [1, 2]})
+        result = _get_value_with_info(df, rk, None, None)
+        assert isinstance(result, DataFrameWithInfo)
+
+    def test_series_returns_series_with_info(self):
+        rk = _risk_key()
+        s = SeriesWithInfo([1.0, 2.0], risk_key=rk)
+        result = _get_value_with_info(s, rk, None, None)
+        assert isinstance(result, SeriesWithInfo)
+
+    def test_float_returns_float_with_info(self):
+        rk = _risk_key()
+        result = _get_value_with_info(42.0, rk, None, None)
+        assert isinstance(result, FloatWithInfo)
+        assert float(result) == pytest.approx(42.0)
 
 
-def test_display_unit():
-    unit = {'A': 1, 'B': -1}
-    risk_key = RiskKey("provider", "the_date", "mkt", RiskRequestParameters(), None, None)
-    value = 1.0
-    float_with_unit = FloatWithInfo(risk_key, value, unit)
-    assert float_with_unit.__repr__() == '1.0 (A/B)'
+class TestValueForMeasureOrScen:
+    def test_single_item(self):
+        rm1 = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        rm2 = _make_rm('Price', RiskMeasureType.PV)
+        res = {rm1: 100, rm2: 200}
+        filtered = _value_for_measure_or_scen(res, rm1)
+        assert rm1 in filtered
+        assert rm2 not in filtered
 
-    unit = {'A': 1, 'B': -2}
-    float_with_unit = FloatWithInfo(risk_key, value, unit)
-    assert float_with_unit.__repr__() == '1.0 (A/B^2)'
+    def test_iterable_items(self):
+        rm1 = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        rm2 = _make_rm('Price', RiskMeasureType.PV)
+        rm3 = _make_rm('Theta', RiskMeasureType.Theta)
+        res = {rm1: 100, rm2: 200, rm3: 300}
+        filtered = _value_for_measure_or_scen(res, [rm1, rm2])
+        assert rm1 in filtered
+        assert rm2 in filtered
+        assert rm3 not in filtered
 
-    unit = {'A': 2}
-    float_with_unit = FloatWithInfo(risk_key, value, unit)
-    assert float_with_unit.__repr__() == '1.0 (A^2)'
+    def test_single_item_removes_non_matching(self):
+        rm1 = _make_rm('DollarPrice', RiskMeasureType.Dollar_Price)
+        rm2 = _make_rm('Price', RiskMeasureType.PV)
+        res = {rm1: 100, rm2: 200}
+        filtered = _value_for_measure_or_scen(res, rm2)
+        assert rm2 in filtered
+        assert rm1 not in filtered
 
-    assert str(float_with_unit) == '1.0'
+
+class TestCompose:
+    def test_scalar_scalar_same_date(self):
+        fwi1 = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        fwi2 = _float_with_info(200.0, date=dt.date(2020, 1, 1))
+        result = _compose(fwi1, fwi2)
+        assert result is fwi2
+
+    def test_scalar_scalar_different_date(self):
+        fwi1 = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        fwi2 = _float_with_info(200.0, date=dt.date(2020, 1, 2))
+        result = _compose(fwi1, fwi2)
+        assert isinstance(result, SeriesWithInfo)
+
+    def test_series_series(self):
+        s1 = _series_with_info([1.0, 2.0], [dt.date(2020, 1, 1), dt.date(2020, 1, 2)])
+        s2 = _series_with_info([3.0], [dt.date(2020, 1, 3)])
+        result = _compose(s1, s2)
+        assert isinstance(result, (SeriesWithInfo, pd.Series))
+        assert len(result) == 3
+
+    def test_series_scalar(self):
+        s = _series_with_info([1.0, 2.0], [dt.date(2020, 1, 1), dt.date(2020, 1, 2)])
+        fwi = _float_with_info(3.0, date=dt.date(2020, 1, 3))
+        result = _compose(s, fwi)
+        assert isinstance(result, (SeriesWithInfo, pd.Series))
+
+    def test_scalar_series(self):
+        fwi = _float_with_info(3.0, date=dt.date(2020, 1, 3))
+        s = _series_with_info([1.0, 2.0], [dt.date(2020, 1, 1), dt.date(2020, 1, 2)])
+        result = _compose(fwi, s)
+        assert isinstance(result, (SeriesWithInfo, pd.Series))
+
+    def test_multiple_risk_measure_results(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi1 = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        fwi2 = _float_with_info(200.0, date=dt.date(2020, 1, 2))
+        mr1 = MultipleRiskMeasureResult(instrument, {rm: fwi1})
+        mr2 = MultipleRiskMeasureResult(instrument, {rm: fwi2})
+        result = _compose(mr1, mr2)
+        assert isinstance(result, MultipleRiskMeasureResult)
+
+    def test_incompatible_types_raises(self):
+        with pytest.raises(RuntimeError, match='cannot be composed'):
+            _compose(42, 'bad')
+
+
+class TestRiskKeysCompatible:
+    def test_compatible(self):
+        fwi1 = _float_with_info(100.0, date=dt.date(2020, 1, 1))
+        fwi2 = _float_with_info(200.0, date=dt.date(2020, 1, 1))
+        assert _risk_keys_compatible(fwi1, fwi2) is True
+
+    def test_incompatible(self):
+        """Different locations make keys incompatible."""
+        m2 = CloseMarket(date=dt.date(2020, 1, 1), location='LDN')
+        rk2 = RiskKey('GS', dt.date(2020, 1, 1), m2, _SHARED_PARAMS, _SHARED_SCENARIO,
+                       RiskMeasure(name='DollarPrice', measure_type=RiskMeasureType.Dollar_Price))
+        fwi1 = _float_with_info(100.0)
+        fwi2 = FloatWithInfo(rk2, 200.0)
+        assert _risk_keys_compatible(fwi1, fwi2) is False
+
+    def test_with_multiple_risk_measure_result_lhs(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        mr = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        fwi2 = _float_with_info(200.0)
+        assert _risk_keys_compatible(mr, fwi2) is True
+
+    def test_with_multiple_risk_measure_result_rhs(self):
+        rm = _make_rm()
+        instrument = MagicMock()
+        fwi = _float_with_info(100.0)
+        mr = MultipleRiskMeasureResult(instrument, {rm: fwi})
+        fwi2 = _float_with_info(200.0)
+        assert _risk_keys_compatible(fwi2, mr) is True
+
+    def test_with_nested_multiple_risk_measure_result(self):
+        rm1 = _make_rm()
+        rm2 = _make_rm('Price', RiskMeasureType.PV)
+        instrument = MagicMock()
+        fwi1 = _float_with_info(100.0)
+        fwi2 = _float_with_info(200.0)
+        inner_mr = MultipleRiskMeasureResult(instrument, {rm1: fwi1})
+        outer_mr = MultipleRiskMeasureResult(instrument, {rm2: inner_mr})
+        assert _risk_keys_compatible(outer_mr, fwi2) is True

@@ -3,12 +3,12 @@
 ## Phases Summary
 | Phase | Focus | Status |
 |-------|-------|--------|
-| 0 | Coverage infrastructure (.coveragerc, pyproject.toml, baseline) | Not started |
-| 1 | Root-level utility modules (errors, json_*, context_base, priceable, base) | Not started |
-| 2 | Small untested modules (algebra, workflow, quote_reports) | Not started |
-| 3 | Risk module (core, result_handlers, scenarios, scenario_utils, transform) | Not started |
-| 4 | Instrument module (core.py) | Not started |
-| 5 | Session module (session.py, 1061 lines) | Not started |
+| 0 | Coverage infrastructure (.coveragerc, pyproject.toml, baseline) | Done (baseline: 67.21%) |
+| 1 | Root-level utility modules (errors, json_*, context_base, priceable, base) | Done (67.21% -> 67.57%) |
+| 2 | Small untested modules (algebra, workflow, quote_reports) | Done (all 100%) |
+| 3 | Risk module (core, result_handlers, scenarios, scenario_utils, transform) | Done (core 98.5%, handlers 100%, scenarios 100%, transform 96.4%) |
+| 4 | Instrument module (core.py) | Done (29.4% -> 85.0%) |
+| 5 | Session module (session.py, 1061 lines) | Done (45.4% -> 89.7%) |
 | 6 | Analytics module (processors, components, datagrid, query_helpers) | Not started |
 | 7 | Backtests module (actions, orders, data_sources, strategy) | Not started |
 | 8 | Deepen existing coverage (measures.py, risk_model, optimizer, etc.) | Not started |
