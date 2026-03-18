@@ -365,7 +365,7 @@ class MeanReversionTriggerRequirements(TriggerRequirements):
                     return TriggerInfo(True, {AddTradeAction: AddTradeActionInfo(scaling=1)})
         elif self.current_position == 1:
             if current_price > rolling_mean:
-                self._current_position = 0
+                self.current_position = 0
                 return TriggerInfo(True, {AddTradeAction: AddTradeActionInfo(scaling=-1)})
         elif self.current_position == -1:
             if current_price > rolling_mean:

@@ -445,7 +445,7 @@ class AggregateTransactionModel(TransactionModel):
         elif self.aggregate_type == TransactionAggType.MIN:
             return min(model.get_unit_cost(state, info, instrument) for model in self.transaction_models)
         else:
-            raise RuntimeError(f'unrecognised aggregation type:{str(self.aggregation_type)}')
+            raise RuntimeError(f'unrecognised aggregation type:{str(self.aggregate_type)}')
 
 
 class TransactionCostEntry:

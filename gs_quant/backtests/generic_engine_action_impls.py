@@ -563,7 +563,7 @@ class RebalanceActionImpl(ActionHandler):
                     current_tc_entries.append(tc_exit)
                     unwind_payment = CashPayment(pos, effective_date=d, transaction_cost_entry=tc_exit)
                     backtest.cash_payments[d].append(unwind_payment)
-                    backtest.transaction_cost_entries[d].append(exit)
+                    backtest.transaction_cost_entries[d].append(tc_exit)
                     break
             if unwind_payment:
                 break

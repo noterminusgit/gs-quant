@@ -138,7 +138,6 @@ class ProcessorOverride(Override):
             override['processor']['processorName'] = self.processor.__class__.__name__
         else:
             override['processor'] = None
-            override['processor']['processorName'] = None
         return override
 
     @classmethod

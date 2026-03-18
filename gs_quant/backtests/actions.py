@@ -434,7 +434,7 @@ class HedgeAction(Action):
             else None
         )
 
-        if not Portfolio:
+        if not portfolio:
             raise RuntimeError('hedge action only accepts one trade or one portfolio')
 
         named_priceables = []

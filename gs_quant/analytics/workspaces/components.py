@@ -510,7 +510,7 @@ class PromoComponent(Component):
         if self.size:
             dict_['parameters']['size'] = self.size.value
         if self.hide_border is not None:
-            dict_['parameters']['hideBorder'] = self.size
+            dict_['parameters']['hideBorder'] = self.hide_border
         if self.transparent is not None:
             dict_['parameters']['transparent'] = self.transparent
 

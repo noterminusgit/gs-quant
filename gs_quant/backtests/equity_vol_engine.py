@@ -85,10 +85,14 @@ def is_synthetic_forward(priceable):
                     and (priceable[0].expiration_date == priceable[1].expiration_date)
                     and (priceable[0].strike_price == priceable[1].strike_price)
                 )
-                is_syn_fwd &= (OptionType.Call, BuySell.Buy) and (OptionType.Put, BuySell.Sell) in {
+                option_set = {
                     (priceable[0].option_type, priceable[0].buy_sell),
                     (priceable[1].option_type, priceable[1].buy_sell),
                 }
+                is_syn_fwd &= (
+                    (OptionType.Call, BuySell.Buy) in option_set
+                    and (OptionType.Put, BuySell.Sell) in option_set
+                )
 
     return is_syn_fwd
 

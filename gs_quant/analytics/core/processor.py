@@ -140,7 +140,7 @@ class BaseProcessor(metaclass=ABCMeta):
             if isinstance(end, RelativeDate):
                 key = get_entity_rdate_key_from_rdate(entity_id, end)
                 end = rdate_entity_map[key]
-            mask = result.data.index >= np.datetime64(end)
+            mask = result.data.index <= np.datetime64(end)
 
         result.data = result.data[mask]
 

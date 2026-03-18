@@ -51,7 +51,7 @@ class OrderBase(metaclass=ABCMeta):
             return price
 
     def execution_quantity(self) -> float:
-        raise RuntimeError('The method execution_price is not implemented on OrderBase')
+        raise RuntimeError('The method execution_quantity is not implemented on OrderBase')
 
     def execution_notional(self, data_hander: DataHandler) -> float:
         return self.execution_price(data_hander) * self.execution_quantity()
