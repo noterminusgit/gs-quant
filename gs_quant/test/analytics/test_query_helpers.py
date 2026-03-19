@@ -140,7 +140,7 @@ class TestAggregateQueries:
 class TestFetchQuery:
     @patch('gs_quant.analytics.core.query_helpers.GsSession')
     def test_normal_query(self, mock_gs):
-        mock_gs.current._post.return_value = {
+        mock_gs.current.sync.post.return_value = {
             'data': [{'date': '2021-01-01', 'price': 100}]
         }
         qi = {
@@ -151,12 +151,12 @@ class TestFetchQuery:
         }
         df = fetch_query(qi)
         assert not df.empty
-        mock_gs.current._post.assert_called_once()
-        assert '/query' in mock_gs.current._post.call_args[0][0]
+        mock_gs.current.sync.post.assert_called_once()
+        assert '/query' in mock_gs.current.sync.post.call_args[0][0]
 
     @patch('gs_quant.analytics.core.query_helpers.GsSession')
     def test_realtime_no_range_uses_last_query(self, mock_gs):
-        mock_gs.current._post.return_value = {
+        mock_gs.current.sync.post.return_value = {
             'data': [{'time': '2021-01-01T10:00:00Z', 'price': 100}]
         }
         qi = {
@@ -166,11 +166,11 @@ class TestFetchQuery:
             'realTime': True,
         }
         df = fetch_query(qi)
-        assert '/last/query' in mock_gs.current._post.call_args[0][0]
+        assert '/last/query' in mock_gs.current.sync.post.call_args[0][0]
 
     @patch('gs_quant.analytics.core.query_helpers.GsSession')
     def test_exception_returns_empty_df(self, mock_gs):
-        mock_gs.current._post.side_effect = RuntimeError('network error')
+        mock_gs.current.sync.post.side_effect = RuntimeError('network error')
         qi = {
             'datasetId': 'DS1',
             'parameters': {},
@@ -183,7 +183,7 @@ class TestFetchQuery:
 
     @patch('gs_quant.analytics.core.query_helpers.GsSession')
     def test_empty_data_returns_empty_df(self, mock_gs):
-        mock_gs.current._post.return_value = {'data': {}}
+        mock_gs.current.sync.post.return_value = {'data': {}}
         qi = {
             'datasetId': 'DS1',
             'parameters': {},
@@ -195,7 +195,7 @@ class TestFetchQuery:
 
     @patch('gs_quant.analytics.core.query_helpers.GsSession')
     def test_time_column_index(self, mock_gs):
-        mock_gs.current._post.return_value = {
+        mock_gs.current.sync.post.return_value = {
             'data': [{'time': '2021-01-01T10:00:00', 'price': 100}]
         }
         qi = {
@@ -209,7 +209,7 @@ class TestFetchQuery:
 
     @patch('gs_quant.analytics.core.query_helpers.GsSession')
     def test_bool_parameter_single_value(self, mock_gs):
-        mock_gs.current._post.return_value = {'data': [{'date': '2021-01-01', 'v': 1}]}
+        mock_gs.current.sync.post.return_value = {'data': [{'date': '2021-01-01', 'v': 1}]}
         qi = {
             'datasetId': 'DS1',
             'parameters': {'flag': {True}},
@@ -217,12 +217,12 @@ class TestFetchQuery:
             'realTime': False,
         }
         fetch_query(qi)
-        payload = mock_gs.current._post.call_args[1]['payload']
+        payload = mock_gs.current.sync.post.call_args[1]['payload']
         assert payload['where']['flag'] is True
 
     @patch('gs_quant.analytics.core.query_helpers.GsSession')
     def test_bool_parameter_both_values_skipped(self, mock_gs):
-        mock_gs.current._post.return_value = {'data': [{'date': '2021-01-01', 'v': 1}]}
+        mock_gs.current.sync.post.return_value = {'data': [{'date': '2021-01-01', 'v': 1}]}
         qi = {
             'datasetId': 'DS1',
             'parameters': {'flag': {True, False}},
@@ -230,7 +230,7 @@ class TestFetchQuery:
             'realTime': False,
         }
         fetch_query(qi)
-        payload = mock_gs.current._post.call_args[1]['payload']
+        payload = mock_gs.current.sync.post.call_args[1]['payload']
         assert 'flag' not in payload['where']
 
 

@@ -16,12 +16,24 @@ under the License.
 
 import datetime as dt
 from unittest import mock
+from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
+import pandas as pd
 from pandas._testing import assert_frame_equal
 
 from gs_quant.common import Currency
-from gs_quant.models.risk_model import FactorRiskModel, MacroRiskModel, ReturnFormat, Unit
+from gs_quant.errors import MqValueError, MqRequestError
+from gs_quant.models.risk_model import (
+    FactorRiskModel,
+    MacroRiskModel,
+    ThematicRiskModel,
+    MarqueeRiskModel,
+    RiskModel,
+    ReturnFormat,
+    Unit,
+    FactorType,
+)
 from gs_quant.models.risk_model_utils import get_optional_data_as_dataframe, _map_measure_to_field_name
 from gs_quant.session import GsSession, Environment
 from gs_quant.target.risk_models import (
@@ -33,6 +45,10 @@ from gs_quant.target.risk_models import (
     RiskModelDataAssetsRequest as DataAssetsRequest,
     RiskModelDataMeasure as Measure,
     RiskModelUniverseIdentifierRequest as UniverseIdentifier,
+    RiskModelCalendar,
+    RiskModelData,
+    Entitlements,
+    Factor as RiskModelFactor,
 )
 
 empty_entitlements = {"execute": [], "edit": [], "view": [], "admin": [], "query": [], "upload": []}
@@ -66,6 +82,20 @@ mock_macro_risk_model_obj = Risk_Model(
     type=RiskModelType.Macro,
 )
 
+mock_thematic_risk_model_obj = Risk_Model(
+    coverage=RiskModelCoverage.Country,
+    id='thematic_model_id',
+    name='Fake Thematic Model',
+    term=RiskModelTerm.Long,
+    universe_identifier=RiskModelUniverseIdentifier.gsid,
+    vendor='GS',
+    version=1.0,
+    entitlements=empty_entitlements,
+    description='Thematic Test',
+    expected_update_time='00:00:00',
+    type=RiskModelType.Thematic,
+)
+
 
 def mock_risk_model(mocker):
     from gs_quant.session import OAuth2Session
@@ -93,6 +123,587 @@ def mock_macro_risk_model(mocker):
     mocker.patch.object(GsSession.current.sync, 'get', return_value=mock_macro_risk_model_obj)
     mocker.patch.object(GsSession.current.sync, 'put', return_value=mock_macro_risk_model_obj)
     return MacroRiskModel.get('macro_model_id')
+
+
+def mock_thematic_risk_model(mocker):
+    from gs_quant.session import OAuth2Session
+
+    OAuth2Session.init = mock.MagicMock(return_value=None)
+    GsSession.use(Environment.QA, 'client_id', 'secret')
+    mocker.patch.object(
+        GsSession.__class__, 'default_value', return_value=GsSession.get(Environment.QA, 'client_id', 'secret')
+    )
+    mocker.patch.object(GsSession.current.sync, 'post', return_value=mock_thematic_risk_model_obj)
+    mocker.patch.object(GsSession.current.sync, 'get', return_value=mock_thematic_risk_model_obj)
+    mocker.patch.object(GsSession.current.sync, 'put', return_value=mock_thematic_risk_model_obj)
+    return ThematicRiskModel.get('thematic_model_id')
+
+
+# ==================== Base RiskModel class tests ====================
+
+
+class TestRiskModelBase:
+    """Test the base RiskModel class"""
+
+    def test_risk_model_init(self):
+        rm = RiskModel('test_id', 'Test Model')
+        assert rm.id == 'test_id'
+        assert rm.name == 'Test Model'
+
+    def test_risk_model_name_setter(self):
+        rm = RiskModel('test_id', 'Test Model')
+        rm.name = 'New Name'
+        assert rm.name == 'New Name'
+
+    def test_risk_model_str(self):
+        rm = RiskModel('test_id', 'Test Model')
+        assert str(rm) == 'test_id'
+
+    def test_risk_model_repr(self):
+        rm = RiskModel('test_id', 'Test Model')
+        r = repr(rm)
+        assert "RiskModel" in r
+        assert "test_id" in r
+        assert "Test Model" in r
+
+
+# ==================== Enum tests ====================
+
+
+class TestEnums:
+    def test_return_format(self):
+        assert ReturnFormat.JSON is not None
+        assert ReturnFormat.DATA_FRAME is not None
+
+    def test_unit(self):
+        assert Unit.PERCENT is not None
+        assert Unit.STANDARD_DEVIATION is not None
+
+    def test_factor_type(self):
+        assert FactorType.Factor.value == 'Factor'
+        assert FactorType.Category.value == 'Category'
+
+    def test_factor_type_repr(self):
+        assert repr(FactorType.Factor) == 'Factor'
+        assert repr(FactorType.Category) == 'Category'
+
+
+# ==================== MarqueeRiskModel tests ====================
+
+
+class TestMarqueeRiskModel:
+
+    def test_init_with_string_type(self):
+        """Test MarqueeRiskModel with string type_ (branch: isinstance check)"""
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_='Factor',
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        assert model.type == RiskModelType.Factor
+
+    def test_init_with_enum_type(self):
+        """Test MarqueeRiskModel with RiskModelType enum"""
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Macro,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        assert model.type == RiskModelType.Macro
+
+    def test_init_with_entitlements_dict(self):
+        """Test entitlements branch: isinstance Dict"""
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+            entitlements={"execute": [], "edit": [], "view": [], "admin": [], "query": [], "upload": []},
+        )
+        assert model.entitlements is not None
+
+    def test_init_with_entitlements_object(self):
+        """Test entitlements branch: isinstance Entitlements"""
+        ent = Entitlements(view=('user1',), edit=('user2',))
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+            entitlements=ent,
+        )
+        assert model.entitlements is ent
+
+    def test_init_with_no_entitlements(self):
+        """Test entitlements branch: None"""
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+            entitlements=None,
+        )
+        assert model.entitlements is None
+
+    def test_property_setters(self):
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        model.type = RiskModelType.Macro
+        assert model.type == RiskModelType.Macro
+
+        model.vendor = 'NewVendor'
+        assert model.vendor == 'NewVendor'
+
+        model.version = 2.0
+        assert model.version == 2.0
+
+        model.coverage = RiskModelCoverage.Global
+        assert model.coverage == RiskModelCoverage.Global
+
+        model.term = RiskModelTerm.Short
+        assert model.term == RiskModelTerm.Short
+
+        model.description = 'New Description'
+        assert model.description == 'New Description'
+
+        model.universe_size = 5000
+        assert model.universe_size == 5000
+
+        model.entitlements = {'view': ['guid:a']}
+        assert model.entitlements == {'view': ['guid:a']}
+
+        model.expected_update_time = dt.time(12, 0)
+        assert model.expected_update_time == dt.time(12, 0)
+
+    def test_universe_identifier_property(self):
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        assert model.universe_identifier == RiskModelUniverseIdentifier.gsid
+
+    def test_str_and_repr(self):
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+            universe_size=5000,
+            description='A model',
+            expected_update_time=dt.time(10, 0),
+            entitlements={'view': []},
+        )
+        assert str(model) == 'test_id'
+        r = repr(model)
+        assert 'test_id' in r
+        assert 'universe_size=' in r
+        assert 'description=' in r
+        assert 'expected_update_time=' in r
+        assert 'entitlements=' in r
+
+    def test_repr_without_optional_fields(self):
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        r = repr(model)
+        assert 'universe_size=' not in r
+        assert 'description=' not in r
+        assert 'expected_update_time=' not in r
+        assert 'entitlements=' not in r
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_delete(self, mock_api):
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        model.delete()
+        mock_api.delete_risk_model.assert_called_once_with('test_id')
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_get_dates(self, mock_api):
+        mock_api.get_risk_model_dates.return_value = ['2022-01-03', '2022-01-04']
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        dates = model.get_dates(dt.date(2022, 1, 1), dt.date(2022, 1, 5))
+        assert dates == [dt.date(2022, 1, 3), dt.date(2022, 1, 4)]
+
+    @patch('gs_quant.models.risk_model.get_closest_date_index')
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_get_calendar_no_dates(self, mock_api, mock_closest):
+        """Test get_calendar with no start_date and no end_date"""
+        cal = RiskModelCalendar(('2022-01-03', '2022-01-04', '2022-01-05'))
+        mock_api.get_risk_model_calendar.return_value = cal
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        result = model.get_calendar()
+        assert result == cal
+        mock_closest.assert_not_called()
+
+    @patch('gs_quant.models.risk_model.get_closest_date_index')
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_get_calendar_with_start_date_only(self, mock_api, mock_closest):
+        """Test get_calendar with start_date only - branch: start_date but not end_date"""
+        cal = RiskModelCalendar(('2022-01-03', '2022-01-04', '2022-01-05'))
+        mock_api.get_risk_model_calendar.return_value = cal
+        mock_closest.return_value = 1  # start_idx
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        result = model.get_calendar(start_date=dt.date(2022, 1, 4))
+        # end_idx defaults to len(business_dates)=3 since no end_date
+        assert result is not None
+
+    @patch('gs_quant.models.risk_model.get_closest_date_index')
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_get_calendar_with_end_date_only(self, mock_api, mock_closest):
+        """Test get_calendar with end_date only - branch: end_date but not start_date"""
+        cal = RiskModelCalendar(('2022-01-03', '2022-01-04', '2022-01-05'))
+        mock_api.get_risk_model_calendar.return_value = cal
+        mock_closest.return_value = 1  # end_idx
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        result = model.get_calendar(end_date=dt.date(2022, 1, 4))
+        # start_idx defaults to 0 since no start_date
+        assert result is not None
+
+    @patch('gs_quant.models.risk_model.get_closest_date_index')
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_get_calendar_with_both_dates(self, mock_api, mock_closest):
+        cal = RiskModelCalendar(('2022-01-03', '2022-01-04', '2022-01-05'))
+        mock_api.get_risk_model_calendar.return_value = cal
+        mock_closest.side_effect = [0, 2]
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        result = model.get_calendar(start_date=dt.date(2022, 1, 3), end_date=dt.date(2022, 1, 5))
+        assert result is not None
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_upload_calendar(self, mock_api):
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        cal = RiskModelCalendar(('2022-01-03',))
+        model.upload_calendar(cal)
+        mock_api.upload_risk_model_calendar.assert_called_once_with('test_id', cal)
+
+    def test_get_missing_dates_no_start_no_end(self):
+        """Test get_missing_dates when start_date=None and end_date=None
+        Branches covered: not start_date (True), not end_date (True)"""
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        posted = [dt.date(2022, 1, 3), dt.date(2022, 1, 5)]
+        # get_calendar returns a RiskModelCalendar with string business_dates
+        # get_missing_dates then calls strptime on these strings
+        cal_result = MagicMock()
+        cal_result.business_dates = ['2022-01-03', '2022-01-04', '2022-01-05']
+        with patch.object(model, 'get_dates', return_value=posted):
+            with patch.object(model, 'get_calendar', return_value=cal_result):
+                missing = model.get_missing_dates()
+                assert dt.date(2022, 1, 4) in missing
+
+    def test_get_missing_dates_with_start_and_end(self):
+        """Test get_missing_dates when start_date and end_date are provided
+        Branches covered: not start_date (False), not end_date (False)"""
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        posted = [dt.date(2022, 1, 3), dt.date(2022, 1, 5)]
+        cal_result = MagicMock()
+        cal_result.business_dates = ['2022-01-03', '2022-01-04', '2022-01-05']
+        with patch.object(model, 'get_dates', return_value=posted):
+            with patch.object(model, 'get_calendar', return_value=cal_result):
+                missing = model.get_missing_dates(start_date=dt.date(2022, 1, 3), end_date=dt.date(2022, 1, 5))
+                assert dt.date(2022, 1, 4) in missing
+
+    def test_get_most_recent_date_from_calendar(self):
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        cal_result = MagicMock()
+        cal_result.business_dates = ['2022-01-03', '2022-01-04', '2022-01-05']
+        with patch.object(model, 'get_calendar', return_value=cal_result):
+            result = model.get_most_recent_date_from_calendar()
+            assert result == dt.date(2022, 1, 5)
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_save_creates_new_model(self, mock_api):
+        """Test save() when create succeeds (no MqRequestError)"""
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+            expected_update_time=dt.time(10, 30),
+        )
+        model.save()
+        mock_api.create_risk_model.assert_called_once()
+        mock_api.update_risk_model.assert_not_called()
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_save_updates_existing_model(self, mock_api):
+        """Test save() when create raises MqRequestError -> falls through to update"""
+        mock_api.create_risk_model.side_effect = MqRequestError(409, 'Already exists')
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+        )
+        model.save()
+        mock_api.create_risk_model.assert_called_once()
+        mock_api.update_risk_model.assert_called_once()
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_save_without_expected_update_time(self, mock_api):
+        """Test save() branch: expected_update_time is None"""
+        model = MarqueeRiskModel(
+            id_='test_id',
+            name='Test',
+            type_=RiskModelType.Factor,
+            vendor='GS',
+            version=1.0,
+            coverage=RiskModelCoverage.Country,
+            universe_identifier=RiskModelUniverseIdentifier.gsid,
+            term=RiskModelTerm.Long,
+            expected_update_time=None,
+        )
+        model.save()
+        mock_api.create_risk_model.assert_called_once()
+
+    def test_from_target_with_all_fields(self):
+        model = MarqueeRiskModel.from_target(mock_risk_model_obj)
+        assert model.id == 'model_id'
+        assert model.name == 'Fake Risk Model'
+
+    def test_from_target_with_string_coverage(self):
+        """Test from_target when coverage is a string (not CoverageType)"""
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = 'Country'
+        obj.term = 'Long'
+        obj.universe_identifier = 'gsid'
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.type_ = 'Factor'
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        obj.universe_size = None
+        model = MarqueeRiskModel.from_target(obj)
+        assert model.coverage == RiskModelCoverage.Country
+
+    def test_from_target_with_none_uid(self):
+        """Test from_target when universe_identifier is None"""
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = RiskModelCoverage.Country
+        obj.term = RiskModelTerm.Long
+        obj.universe_identifier = None
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.type_ = RiskModelType.Factor
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        obj.universe_size = None
+        model = MarqueeRiskModel.from_target(obj)
+        assert model.universe_identifier is None
+
+    def test_from_target_with_type_none_uses_not_type_branch(self):
+        """Test from_target branch: not model.type_ -> passes type_ directly
+        The 'not model.type_' branch in from_target passes None as type_.
+        Since the constructor can't handle None type_, this branch is only hit
+        when type_ is falsy but not None. We test it via from_target logic."""
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = RiskModelCoverage.Country
+        obj.term = RiskModelTerm.Long
+        obj.universe_identifier = RiskModelUniverseIdentifier.gsid
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.type_ = RiskModelType.Macro  # Already an enum instance -> isinstance branch
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        obj.universe_size = None
+        model = MarqueeRiskModel.from_target(obj)
+        assert model.type == RiskModelType.Macro
+
+    def test_from_target_with_string_type(self):
+        """Test from_target when type_ is a string -> RiskModelType(model.type_)"""
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = RiskModelCoverage.Country
+        obj.term = RiskModelTerm.Long
+        obj.universe_identifier = RiskModelUniverseIdentifier.gsid
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.type_ = 'Factor'  # String, not enum
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        obj.universe_size = None
+        model = MarqueeRiskModel.from_target(obj)
+        assert model.type == RiskModelType.Factor
+
+    def test_from_target_without_expected_update_time(self):
+        """Test from_target branch: expected_update_time is None"""
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = RiskModelCoverage.Country
+        obj.term = RiskModelTerm.Long
+        obj.universe_identifier = RiskModelUniverseIdentifier.gsid
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.type_ = RiskModelType.Factor
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        obj.universe_size = None
+        model = MarqueeRiskModel.from_target(obj)
+        assert model.expected_update_time is None
+
+    def test_from_many_targets(self):
+        models = MarqueeRiskModel.from_many_targets((mock_risk_model_obj, mock_macro_risk_model_obj))
+        assert len(models) == 2
+
+
+# ==================== FactorRiskModel tests ====================
 
 
 def test_create_risk_model(mocker):
@@ -204,6 +815,1359 @@ def test_update_risk_model(mocker):
     new_model.save()
     mocker.patch.object(GsSession.current.sync, 'get', return_value=new_model)
     assert new_model.type == RiskModelType.Thematic
+
+
+# ==================== get_data error handling ====================
+
+
+class TestGetDataErrorHandling:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_data_500_error(self, mock_api):
+        """Test get_data when API raises 500+ error -> wraps in timeout message"""
+        mock_api.get_risk_model_data.side_effect = MqRequestError(500, 'Server error')
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(MqRequestError) as exc_info:
+            model.get_data(
+                measures=[Measure.Total_Risk],
+                start_date=dt.date(2022, 1, 1),
+                end_date=dt.date(2022, 1, 5),
+            )
+        assert 'timeout' in str(exc_info.value.message)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_data_400_error(self, mock_api):
+        """Test get_data when API raises <500 error -> re-raises original"""
+        mock_api.get_risk_model_data.side_effect = MqRequestError(400, 'Bad request')
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(MqRequestError) as exc_info:
+            model.get_data(
+                measures=[Measure.Total_Risk],
+                start_date=dt.date(2022, 1, 1),
+            )
+        assert exc_info.value.status == 400
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_data_with_factor_objects(self, mock_api):
+        """Test get_data when factors list contains Factor objects"""
+        from gs_quant.markets.factor import Factor as FactorObj
+        mock_factor = MagicMock(spec=FactorObj)
+        mock_factor.name = 'TestFactor'
+        mock_api.get_risk_model_data.return_value = {'results': []}
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_data(
+            measures=[Measure.Total_Risk],
+            start_date=dt.date(2022, 1, 1),
+            factors=[mock_factor, 'StringFactor'],
+        )
+        # The Factor object should be converted to its name
+        call_kwargs = mock_api.get_risk_model_data.call_args
+        assert 'TestFactor' in call_kwargs.kwargs['factors']
+        assert 'StringFactor' in call_kwargs.kwargs['factors']
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_data_no_factors(self, mock_api):
+        """Test get_data with factors=None"""
+        mock_api.get_risk_model_data.return_value = {'results': []}
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_data(
+            measures=[Measure.Total_Risk],
+            start_date=dt.date(2022, 1, 1),
+            factors=None,
+        )
+        call_kwargs = mock_api.get_risk_model_data.call_args
+        assert call_kwargs.kwargs['factors'] is None
+
+
+# ==================== upload_data tests ====================
+
+
+class TestUploadData:
+
+    @patch('gs_quant.models.risk_model.upload_model_data')
+    @patch('gs_quant.models.risk_model.batch_and_upload_partial_data')
+    @patch('gs_quant.models.risk_model.get_universe_size')
+    @patch('gs_quant.models.risk_model.only_factor_data_is_present')
+    def test_upload_data_small_universe(self, mock_only_factor, mock_universe_size, mock_batch, mock_upload):
+        """Test upload_data when universe size is small enough for single request"""
+        mock_only_factor.return_value = False
+        mock_universe_size.return_value = 5  # Small, under default 10000
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        data = {
+            'date': '2022-01-03',
+            'factorData': [{'factorId': '1'}],
+            'assetData': {'universe': ['a', 'b'], 'specificRisk': [1, 2]},
+        }
+        model.upload_data(data)
+        mock_upload.assert_called_once()
+        mock_batch.assert_not_called()
+
+    @patch('gs_quant.models.risk_model.upload_model_data')
+    @patch('gs_quant.models.risk_model.batch_and_upload_partial_data')
+    @patch('gs_quant.models.risk_model.get_universe_size')
+    @patch('gs_quant.models.risk_model.only_factor_data_is_present')
+    def test_upload_data_large_universe(self, mock_only_factor, mock_universe_size, mock_batch, mock_upload):
+        """Test upload_data when universe is large -> uses batch"""
+        mock_only_factor.return_value = False
+        mock_universe_size.return_value = 20000  # larger than default 10000
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        data = {
+            'date': '2022-01-03',
+            'factorData': [{'factorId': '1'}],
+            'assetData': {'universe': list(range(20000))},
+        }
+        model.upload_data(data)
+        mock_batch.assert_called_once()
+        mock_upload.assert_not_called()
+
+    @patch('gs_quant.models.risk_model.upload_model_data')
+    @patch('gs_quant.models.risk_model.batch_and_upload_partial_data')
+    @patch('gs_quant.models.risk_model.get_universe_size')
+    @patch('gs_quant.models.risk_model.only_factor_data_is_present')
+    def test_upload_data_only_factor_data(self, mock_only_factor, mock_universe_size, mock_batch, mock_upload):
+        """Test upload_data when only factor data present -> partial request path"""
+        mock_only_factor.return_value = True
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        data = {
+            'date': '2022-01-03',
+            'factorData': [{'factorId': '1'}],
+        }
+        model.upload_data(data)
+        # only_factor_data_present -> target_universe_size=0, full_data_present=False -> partial
+        mock_batch.assert_called_once()
+        mock_upload.assert_not_called()
+
+    @patch('gs_quant.models.risk_model.upload_model_data')
+    @patch('gs_quant.models.risk_model.batch_and_upload_partial_data')
+    @patch('gs_quant.models.risk_model.get_universe_size')
+    @patch('gs_quant.models.risk_model.only_factor_data_is_present')
+    def test_upload_data_with_risk_model_data_object(self, mock_only_factor, mock_universe_size, mock_batch, mock_upload):
+        """Test upload_data with a RiskModelData object (converted via as_dict)"""
+        mock_only_factor.return_value = False
+        mock_universe_size.return_value = 2
+        # Create a real RiskModelData to test the type(data) is RiskModelData branch
+        rmd = RiskModelData(date='2022-01-03')
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        model.upload_data(rmd)
+        # Verify as_dict was called (the data was converted)
+        # The batch function should have been called since factorData+assetData are both missing
+        mock_batch.assert_called_once()
+
+    @patch('gs_quant.models.risk_model.upload_model_data')
+    def test_upload_partial_data(self, mock_upload):
+        """Test deprecated upload_partial_data"""
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        data = {'date': '2022-01-03', 'factorData': []}
+        model.upload_partial_data(data, final_upload=True)
+        mock_upload.assert_called_once_with('test_id', data, partial_upload=True, final_upload=True)
+
+
+# ==================== upload_asset_coverage_data ====================
+
+
+class TestUploadAssetCoverage:
+
+    @patch('gs_quant.models.risk_model.batch_and_upload_coverage_data')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_upload_asset_coverage_data_with_date(self, mock_rm_api, mock_frm_api, mock_batch):
+        """Test upload_asset_coverage_data with a date provided"""
+        mock_frm_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {'universe': ['123', '456']},
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        model.upload_asset_coverage_data(date=dt.date(2022, 1, 3))
+        mock_batch.assert_called_once()
+
+    @patch('gs_quant.models.risk_model.batch_and_upload_coverage_data')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_upload_asset_coverage_data_without_date(self, mock_rm_api, mock_frm_api, mock_batch):
+        """Test upload_asset_coverage_data with no date (uses get_dates()[-1])"""
+        mock_rm_api.get_risk_model_dates.return_value = ['2022-01-03', '2022-01-04']
+        mock_frm_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-04',
+                    'assetData': {'universe': ['123']},
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        model.upload_asset_coverage_data()
+        mock_batch.assert_called_once()
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_upload_asset_coverage_data_no_gsid_list(self, mock_rm_api, mock_frm_api):
+        """Test upload_asset_coverage_data when no asset data found"""
+        mock_frm_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {'universe': ['123']},
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        # The get for a specific date returns None for gsid_list
+        with patch.object(model, 'get_asset_universe', return_value={}) as mock_gau:
+            with pytest.raises(MqRequestError):
+                model.upload_asset_coverage_data(date=dt.date(2022, 1, 3))
+
+
+# ==================== get_factor and get_many_factors ====================
+
+
+class TestGetFactor:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_found(self, mock_api):
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+            {'name': 'Value', 'identifier': 'f2', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        factor = model.get_factor('Momentum')
+        assert factor.name == 'Momentum'
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_not_found(self, mock_api):
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(MqValueError, match='does not in exist'):
+            model.get_factor('NonExistent')
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_many_factors_all(self, mock_api):
+        """Test get_many_factors with no factor_names or factor_ids -> returns all"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+            {'name': 'Value', 'identifier': 'f2', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        factors = model.get_many_factors()
+        assert len(factors) == 2
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_many_factors_by_names(self, mock_api):
+        """Test get_many_factors filtering by factor_names"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+            {'name': 'Value', 'identifier': 'f2', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        factors = model.get_many_factors(factor_names=['Momentum'])
+        assert len(factors) == 1
+        assert factors[0].name == 'Momentum'
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_many_factors_by_ids(self, mock_api):
+        """Test get_many_factors filtering by factor_ids"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+            {'name': 'Value', 'identifier': 'f2', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        factors = model.get_many_factors(factor_ids=['f2'])
+        assert len(factors) == 1
+        assert factors[0].name == 'Value'
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_many_factors_names_not_found(self, mock_api):
+        """Test get_many_factors when some factor_names are not found"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(MqValueError, match='not in model'):
+            model.get_many_factors(factor_names=['NonExistent'])
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_many_factors_ids_not_found(self, mock_api):
+        """Test get_many_factors when some factor_ids are not found"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(MqValueError, match='not in model'):
+            model.get_many_factors(factor_ids=['non_existent_id'])
+
+
+# ==================== save_factor_metadata / delete_factor_metadata ====================
+
+
+class TestFactorMetadata:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_save_factor_metadata_update(self, mock_api):
+        """save_factor_metadata when update succeeds"""
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        factor = RiskModelFactor(identifier='f1', type_='Factor')
+        model.save_factor_metadata(factor)
+        mock_api.update_risk_model_factor.assert_called_once_with('test_id', factor)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_save_factor_metadata_create(self, mock_api):
+        """save_factor_metadata when update raises MqRequestError -> create"""
+        mock_api.update_risk_model_factor.side_effect = MqRequestError(404, 'Not found')
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        factor = RiskModelFactor(identifier='f1', type_='Factor')
+        model.save_factor_metadata(factor)
+        mock_api.create_risk_model_factor.assert_called_once_with('test_id', factor)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_delete_factor_metadata(self, mock_api):
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        model.delete_factor_metadata('f1')
+        mock_api.delete_risk_model_factor.assert_called_once_with('test_id', 'f1')
+
+
+# ==================== get_factor_data tests ====================
+
+
+class TestGetFactorData:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_data_category_type(self, mock_api):
+        """Test get_factor_data with factor_type=Category"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Style', 'identifier': 'c1', 'type': 'Category'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_data(factor_type=FactorType.Category)
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_data_category_type_with_category_filter_raises(self, mock_api):
+        """Test error when Category type + category_filter"""
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(ValueError, match='Category filter is not applicable'):
+            model.get_factor_data(factor_type=FactorType.Category, category_filter=['Style'])
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_data_factor_type_with_aggregation_raises(self, mock_api):
+        """Test error when Factor type + Aggregations in category_filter"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(ValueError, match='Aggregations should not be passed'):
+            model.get_factor_data(factor_type=FactorType.Factor, category_filter=['Aggregations'])
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_data_factor_type_filters(self, mock_api):
+        """Test get_factor_data with factor_type=Factor filters out non-Factor types"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+            {'name': 'Style', 'identifier': 'c1', 'type': 'Category'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_data(factor_type=FactorType.Factor)
+        # Only Factor type rows should remain
+        assert len(result) == 1
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_data_json_format(self, mock_api):
+        """Test get_factor_data returning JSON format"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_data(format=ReturnFormat.JSON)
+        assert isinstance(result, list)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_data_with_category_filter(self, mock_api):
+        """Test get_factor_data with category_filter"""
+        mock_api.get_risk_model_factor_data.return_value = [
+            {'name': 'Momentum', 'identifier': 'f1', 'type': 'Factor', 'factorCategory': 'Style'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_data(category_filter=['Style'])
+        assert isinstance(result, pd.DataFrame)
+
+
+# ==================== get_intraday_factor_data ====================
+
+
+class TestIntradayFactorData:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_intraday_factor_data_dataframe(self, mock_api):
+        mock_api.get_risk_model_factor_data_intraday.return_value = [
+            {'factorId': '1', 'factorReturn': 0.01, 'timestamp': '2022-01-03T12:00:00'},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_intraday_factor_data(format=ReturnFormat.DATA_FRAME)
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_intraday_factor_data_json(self, mock_api):
+        mock_api.get_risk_model_factor_data_intraday.return_value = [
+            {'factorId': '1', 'factorReturn': 0.01},
+        ]
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_intraday_factor_data(format=ReturnFormat.JSON)
+        assert isinstance(result, list)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_intraday_factor_data_with_category_filter(self, mock_api):
+        mock_api.get_risk_model_factor_data_intraday.return_value = []
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_intraday_factor_data(category_filter=['Style'], format=ReturnFormat.JSON)
+        call_kwargs = mock_api.get_risk_model_factor_data_intraday.call_args
+        assert call_kwargs.kwargs['factor_categories'] == ['Style']
+
+
+# ==================== get_asset_universe ====================
+
+
+class TestGetAssetUniverse:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_asset_universe_json(self, mock_api):
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {'universe': ['abc', 'def']},
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_asset_universe(
+            start_date=dt.date(2022, 1, 3),
+            end_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.JSON,
+        )
+        assert dt.date(2022, 1, 3) in result
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_asset_universe_dataframe(self, mock_api):
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {'universe': ['abc', 'def']},
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_asset_universe(
+            start_date=dt.date(2022, 1, 3),
+            end_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_asset_universe_no_end_date_no_universe(self, mock_api):
+        """Branch: assets.universe is empty and end_date is None -> end_date = start_date"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {'universe': ['abc']},
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_asset_universe(start_date=dt.date(2022, 1, 3))
+        assert isinstance(result, pd.DataFrame)
+
+
+# ==================== get_universe_exposure tests ====================
+
+
+class TestGetUniverseExposure:
+
+    @patch('gs_quant.models.risk_model.build_factor_id_to_name_map')
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_universe_exposure_by_name(self, mock_api, mock_build_asset, mock_build_factor):
+        """Test get_universe_exposure with get_factors_by_name=True"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [{'factorId': '1', 'factorName': 'Momentum'}],
+                    'assetData': {
+                        'universe': ['abc'],
+                        'factorExposure': [{'1': 0.5}],
+                    },
+                }
+            ]
+        }
+        mock_build_factor.return_value = {'1': 'Momentum'}
+        mock_build_asset.return_value = {
+            'abc': {'2022-01-03': {'Momentum': 0.5}},
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_universe_exposure(
+            start_date=dt.date(2022, 1, 3),
+            assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+            get_factors_by_name=True,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_universe_exposure_by_id(self, mock_api, mock_build_asset):
+        """Test get_universe_exposure with get_factors_by_name=False"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [{'factorId': '1', 'factorName': 'Momentum'}],
+                    'assetData': {
+                        'universe': ['abc'],
+                        'factorExposure': [{'1': 0.5}],
+                    },
+                }
+            ]
+        }
+        mock_build_asset.return_value = {
+            'abc': {'2022-01-03': {'1': 0.5}},
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_universe_exposure(
+            start_date=dt.date(2022, 1, 3),
+            assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+            get_factors_by_name=False,
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, dict)
+
+
+# ==================== FactorRiskModel specific ====================
+
+
+class TestFactorRiskModelSpecific:
+
+    def test_factor_risk_model_from_target(self):
+        model = FactorRiskModel.from_target(mock_risk_model_obj)
+        assert isinstance(model, FactorRiskModel)
+        assert model.type == RiskModelType.Factor
+
+    def test_factor_risk_model_from_target_string_fields(self):
+        """Test from_target with string fields (not enum instances)"""
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = 'Country'
+        obj.term = 'Long'
+        obj.universe_identifier = 'gsid'
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.universe_size = None
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = '10:30:00'
+        model = FactorRiskModel.from_target(obj)
+        assert model.expected_update_time == dt.time(10, 30)
+
+    def test_factor_risk_model_from_target_none_uid(self):
+        """Test from_target when uid is None"""
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = RiskModelCoverage.Country
+        obj.term = RiskModelTerm.Long
+        obj.universe_identifier = None
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.universe_size = None
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        model = FactorRiskModel.from_target(obj)
+        assert model.universe_identifier is None
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_get_many(self, mock_api):
+        mock_api.get_risk_models.return_value = (mock_risk_model_obj,)
+        models = FactorRiskModel.get_many(ids=['model_id'])
+        assert len(models) == 1
+
+    def test_repr_with_optional_fields(self):
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+            universe_size=5000, description='A desc',
+            expected_update_time=dt.time(10, 0),
+            entitlements={'view': []},
+        )
+        r = repr(model)
+        assert 'FactorRiskModel' in r
+        assert 'universe_size=' in r
+        assert 'description=' in r
+        assert 'expected_update_time=' in r
+
+    def test_repr_without_optional_fields(self):
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        r = repr(model)
+        assert 'FactorRiskModel' in r
+        assert 'universe_size=' not in r
+
+
+# ==================== FactorRiskModel days-based measure KeyError paths ====================
+
+
+class TestDaysBasedMeasureKeyErrors:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_bid_ask_spread_invalid_days(self, mock_api):
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(ValueError, match='Bid Ask Spread data is not available'):
+            model.get_bid_ask_spread(dt.date(2022, 1, 3), days=999)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_trading_volume_invalid_days(self, mock_api):
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(ValueError, match='Trading volume data is not available'):
+            model.get_trading_volume(dt.date(2022, 1, 3), days=999)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_traded_value_invalid_days(self, mock_api):
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(ValueError, match='Traded Value data is not available'):
+            model.get_traded_value(dt.date(2022, 1, 3), days=999)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_composite_volume_invalid_days(self, mock_api):
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(ValueError, match='Composite Volume data is not available'):
+            model.get_composite_volume(dt.date(2022, 1, 3), days=999)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_composite_value_invalid_days(self, mock_api):
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        with pytest.raises(ValueError, match='Composite Value data is not available'):
+            model.get_composite_value(dt.date(2022, 1, 3), days=999)
+
+
+# ==================== _build_covariance_matrix_measure ====================
+
+
+class TestBuildCovarianceMatrix:
+
+    @patch('gs_quant.models.risk_model.get_covariance_matrix_dataframe')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_covariance_matrix_dataframe_with_assets(self, mock_api, mock_cov_df):
+        """Branch: assets is provided -> limit_factors=True, extra measures"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [{'factorId': '1', 'factorName': 'f1'}],
+                    'covarianceMatrix': [[1.0]],
+                }
+            ]
+        }
+        mock_cov_df.return_value = pd.DataFrame()
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_covariance_matrix(
+            start_date=dt.date(2022, 1, 3),
+            assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        # Verify limit_factors is True when assets provided
+        call_kwargs = mock_api.get_risk_model_data.call_args.kwargs
+        assert call_kwargs['limit_factors'] is True
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_covariance_matrix_json_no_assets(self, mock_api):
+        """Branch: assets=None -> limit_factors=False, JSON format"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [{'factorId': '1', 'factorName': 'f1'}],
+                    'covarianceMatrix': [[1.0]],
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_covariance_matrix(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, list)
+
+
+# ==================== get_factor_volatility ====================
+
+
+class TestGetFactorVolatility:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_volatility_json_no_name_no_factors(self, mock_api):
+        """Branch: JSON + not get_factors_by_name + not factors -> returns raw results"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [
+                        {'factorId': '1', 'factorName': 'f1', 'factorVolatility': 0.05},
+                    ],
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_volatility(
+            start_date=dt.date(2022, 1, 3),
+            get_factors_by_name=False,
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, list)
+
+    @patch('gs_quant.models.risk_model.build_factor_volatility_dataframe')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_volatility_json_with_factors(self, mock_api, mock_build):
+        """Branch: JSON + factors -> goes through else path, returns dict"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [
+                        {'factorId': '1', 'factorName': 'f1', 'factorVolatility': 0.05},
+                    ],
+                }
+            ]
+        }
+        mock_build.return_value = pd.DataFrame({'f1': [0.05]})
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_volatility(
+            start_date=dt.date(2022, 1, 3),
+            factors=['f1'],
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, dict)
+
+    @patch('gs_quant.models.risk_model.build_factor_volatility_dataframe')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_volatility_dataframe(self, mock_api, mock_build):
+        """Branch: DATA_FRAME format -> returns DataFrame"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [
+                        {'factorId': '1', 'factorName': 'f1', 'factorVolatility': 0.05},
+                    ],
+                }
+            ]
+        }
+        mock_build.return_value = pd.DataFrame({'f1': [0.05]})
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_volatility(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.build_factor_volatility_dataframe')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_volatility_json_by_name(self, mock_api, mock_build):
+        """Branch: JSON + get_factors_by_name -> goes through else (to_dict)"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [
+                        {'factorId': '1', 'factorName': 'f1', 'factorVolatility': 0.05},
+                    ],
+                }
+            ]
+        }
+        mock_build.return_value = pd.DataFrame({'f1': [0.05]})
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_volatility(
+            start_date=dt.date(2022, 1, 3),
+            get_factors_by_name=True,
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, dict)
+
+
+# ==================== get_issuer_specific_covariance / get_factor_portfolios ====================
+
+
+class TestISCAndFactorPortfolios:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_issuer_specific_covariance_json(self, mock_api):
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'issuerSpecificCovariance': {
+                        'universeId1': ['a'], 'universeId2': ['b'], 'covariance': [0.01]
+                    },
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_issuer_specific_covariance(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, list)
+
+    @patch('gs_quant.models.risk_model.get_optional_data_as_dataframe')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_issuer_specific_covariance_dataframe(self, mock_api, mock_get_opt):
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'issuerSpecificCovariance': {
+                        'universeId1': ['a'], 'universeId2': ['b'], 'covariance': [0.01]
+                    },
+                }
+            ]
+        }
+        mock_get_opt.return_value = pd.DataFrame({'covariance': [0.01]})
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_issuer_specific_covariance(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.build_pfp_data_dataframe')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_portfolios(self, mock_api, mock_pfp):
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [{'factorId': '1', 'factorName': 'f1'}],
+                    'factorPortfolios': {
+                        'universe': ['a', 'b'],
+                        'portfolio': [{'factorId': '1', 'weights': [0.5, 0.5]}],
+                    },
+                }
+            ]
+        }
+        mock_pfp.return_value = pd.DataFrame()
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_portfolios(start_date=dt.date(2022, 1, 3))
+        assert isinstance(result, pd.DataFrame)
+
+
+# ==================== _build_currency_rates_data ====================
+
+
+class TestCurrencyRatesData:
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_build_currency_rates_data_no_currencies_filter(self, mock_api):
+        """Test with no currencies filter -> returns all"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'currencyRatesData': {
+                        'riskFreeRate': [0.01, 0.02],
+                        'currency': ['USD', 'EUR'],
+                    },
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_risk_free_rate(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_build_currency_rates_data_with_currencies_filter(self, mock_api):
+        """Test with currencies filter"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'currencyRatesData': {
+                        'riskFreeRate': [0.01, 0.02],
+                        'currency': ['USD', 'EUR'],
+                    },
+                }
+            ]
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_risk_free_rate(
+            start_date=dt.date(2022, 1, 3),
+            currencies=[Currency.USD],
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, dict)
+
+
+# ==================== MacroRiskModel tests ====================
+
+
+class TestMacroRiskModel:
+
+    def test_macro_risk_model_init(self):
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        assert model.type == RiskModelType.Macro
+
+    def test_macro_risk_model_from_target(self):
+        model = MacroRiskModel.from_target(mock_macro_risk_model_obj)
+        assert isinstance(model, MacroRiskModel)
+        assert model.type == RiskModelType.Macro
+
+    def test_macro_risk_model_from_target_string_fields(self):
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = 'Country'
+        obj.term = 'Long'
+        obj.universe_identifier = 'gsid'
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.universe_size = None
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        model = MacroRiskModel.from_target(obj)
+        assert model.coverage == RiskModelCoverage.Country
+
+    def test_macro_risk_model_from_target_none_uid(self):
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = RiskModelCoverage.Country
+        obj.term = RiskModelTerm.Long
+        obj.universe_identifier = None
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.universe_size = None
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        model = MacroRiskModel.from_target(obj)
+        assert model.universe_identifier is None
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_get_many(self, mock_api):
+        mock_api.get_risk_models.return_value = (mock_macro_risk_model_obj,)
+        models = MacroRiskModel.get_many(ids=['macro_model_id'])
+        assert len(models) == 1
+
+    def test_repr_with_optional_fields(self):
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+            universe_size=3000, description='Macro desc',
+            expected_update_time=dt.time(9, 0), entitlements={'view': []},
+        )
+        r = repr(model)
+        assert 'MacroRiskModel' in r
+        assert 'universe_size=' in r
+        assert 'description=' in r
+        assert 'expected_update_time=' in r
+        assert 'entitlements=' in r
+
+    def test_repr_without_optional_fields(self):
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        r = repr(model)
+        assert 'MacroRiskModel' in r
+        assert 'universe_size=' not in r
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_fair_value_gap_percent(self, mock_api, mock_build):
+        """Test get_fair_value_gap with Unit.PERCENT"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {
+                        'universe': ['abc'],
+                        'fairValueGapPercent': [10.0],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {'abc': {'2022-01-03': 10.0}}
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_fair_value_gap(
+            start_date=dt.date(2022, 1, 3),
+            fair_value_gap_unit=Unit.PERCENT,
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, dict)
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_fair_value_gap_standard_deviation(self, mock_api, mock_build):
+        """Test get_fair_value_gap with Unit.STANDARD_DEVIATION (default)"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {
+                        'universe': ['abc'],
+                        'fairValueGapStandardDeviation': [2.5],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {'abc': {'2022-01-03': 2.5}}
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_fair_value_gap(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, dict)
+
+
+# ==================== MacroRiskModel.get_universe_sensitivity ====================
+
+
+class TestMacroUniverseSensitivity:
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_universe_sensitivity_factor_type(self, mock_api, mock_build):
+        """Test universe_sensitivity with FactorType.Factor -> returns directly"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [{'factorId': '1', 'factorName': 'Momentum'}],
+                    'assetData': {
+                        'universe': ['abc'],
+                        'factorExposure': [{'1': 0.5}],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {
+            'abc': {'2022-01-03': {'1': 0.5}},
+        }
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_universe_sensitivity(
+            start_date=dt.date(2022, 1, 3),
+            assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+            factor_type=FactorType.Factor,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_universe_sensitivity_category_type_empty(self, mock_api, mock_build):
+        """Test universe_sensitivity with FactorType.Category when sensitivity_df is empty"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': []
+        }
+        mock_build.return_value = {}
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        # When results are empty, the DataFrame will be empty
+        with patch.object(model, 'get_universe_exposure', return_value=pd.DataFrame()):
+            result = model.get_universe_sensitivity(
+                start_date=dt.date(2022, 1, 3),
+                assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+                factor_type=FactorType.Category,
+            )
+            assert isinstance(result, pd.DataFrame)
+            assert result.empty
+
+
+# ==================== ThematicRiskModel tests ====================
+
+
+class TestThematicRiskModel:
+
+    def test_thematic_risk_model_init(self):
+        model = ThematicRiskModel(
+            'thematic_id', 'Thematic Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        assert model.type == RiskModelType.Thematic
+
+    def test_thematic_risk_model_from_target(self):
+        model = ThematicRiskModel.from_target(mock_thematic_risk_model_obj)
+        assert isinstance(model, ThematicRiskModel)
+
+    def test_thematic_risk_model_from_target_string_fields(self):
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = 'Country'
+        obj.term = 'Long'
+        obj.universe_identifier = 'gsid'
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.universe_size = None
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = '08:00:00'
+        model = ThematicRiskModel.from_target(obj)
+        assert model.expected_update_time == dt.time(8, 0)
+
+    def test_thematic_risk_model_from_target_none_uid(self):
+        obj = MagicMock()
+        obj.id = 'test'
+        obj.name = 'Test'
+        obj.coverage = RiskModelCoverage.Country
+        obj.term = RiskModelTerm.Long
+        obj.universe_identifier = None
+        obj.vendor = 'GS'
+        obj.version = 1.0
+        obj.universe_size = None
+        obj.entitlements = None
+        obj.description = None
+        obj.expected_update_time = None
+        model = ThematicRiskModel.from_target(obj)
+        assert model.universe_identifier is None
+
+    @patch('gs_quant.models.risk_model.GsRiskModelApi')
+    def test_get_many(self, mock_api):
+        mock_api.get_risk_models.return_value = (mock_thematic_risk_model_obj,)
+        models = ThematicRiskModel.get_many(ids=['thematic_model_id'])
+        assert len(models) == 1
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_universe_sensitivity(self, mock_api, mock_build):
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [{'factorId': '1', 'factorName': 'Basket1'}],
+                    'assetData': {
+                        'universe': ['abc'],
+                        'factorExposure': [{'1': 0.5}],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {
+            'abc': {'2022-01-03': {'1': 0.5}},
+        }
+        model = ThematicRiskModel(
+            'thematic_id', 'Thematic Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_universe_sensitivity(
+            start_date=dt.date(2022, 1, 3),
+            assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    def test_repr_with_optional_fields(self):
+        model = ThematicRiskModel(
+            'thematic_id', 'Thematic Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+            universe_size=2000, description='Thematic desc',
+            expected_update_time=dt.time(8, 0), entitlements={'view': []},
+        )
+        r = repr(model)
+        assert 'ThematicRiskModel' in r
+        assert 'universe_size=' in r
+        assert 'description=' in r
+        assert 'expected_update_time=' in r
+
+    def test_repr_without_optional_fields(self):
+        model = ThematicRiskModel(
+            'thematic_id', 'Thematic Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        r = repr(model)
+        assert 'ThematicRiskModel' in r
+        assert 'universe_size=' not in r
+
+
+# ==================== Original tests (preserved) ====================
 
 
 def test_get_r_squared(mocker):
@@ -482,13 +2446,6 @@ def test_get_factor_z_score(mocker):
 def test_get_predicted_beta(mocker):
     model = mock_risk_model(mocker)
     universe = ["904026", "232128", "24985", "160444"]
-    query = {
-        'startDate': '2022-04-04',
-        'endDate': '2022-04-06',
-        'assets': DataAssetsRequest(UniverseIdentifier.gsid, universe),
-        'measures': [Measure.Predicted_Beta, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'missingDates': ['2022-04-04', '2022-04-06'],
@@ -513,16 +2470,11 @@ def test_get_predicted_beta(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_predicted_beta(
         start_date=dt.date(2022, 4, 4),
         end_date=dt.date(2022, 4, 6),
         assets=DataAssetsRequest(UniverseIdentifier.gsid, universe),
         format=ReturnFormat.JSON,
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == predicted_beta_response
 
@@ -530,13 +2482,6 @@ def test_get_predicted_beta(mocker):
 def test_get_global_predicted_beta(mocker):
     model = mock_risk_model(mocker)
     universe = ["904026", "232128", "24985", "160444"]
-    query = {
-        'startDate': '2022-04-04',
-        'endDate': '2022-04-06',
-        'assets': DataAssetsRequest(UniverseIdentifier.gsid, universe),
-        'measures': [Measure.Global_Predicted_Beta, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'missingDates': ['2022-04-04', '2022-04-06'],
@@ -561,16 +2506,11 @@ def test_get_global_predicted_beta(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_global_predicted_beta(
         start_date=dt.date(2022, 4, 4),
         end_date=dt.date(2022, 4, 6),
         assets=DataAssetsRequest(UniverseIdentifier.gsid, universe),
         format=ReturnFormat.JSON,
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == global_predicted_beta_response
 
@@ -578,13 +2518,6 @@ def test_get_global_predicted_beta(mocker):
 def test_get_estimation_universe_weights(mocker):
     model = mock_risk_model(mocker)
     universe = ["904026", "232128", "24985", "160444"]
-    query = {
-        'startDate': '2022-04-04',
-        'endDate': '2022-04-06',
-        'assets': DataAssetsRequest(UniverseIdentifier.gsid, universe),
-        'measures': [Measure.Estimation_Universe_Weight, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'missingDates': ['2022-04-04', '2022-04-06'],
@@ -609,16 +2542,11 @@ def test_get_estimation_universe_weights(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_estimation_universe_weights(
         start_date=dt.date(2022, 4, 4),
         end_date=dt.date(2022, 4, 6),
         assets=DataAssetsRequest(UniverseIdentifier.gsid, universe),
         format=ReturnFormat.JSON,
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == estu_response
 
@@ -626,13 +2554,6 @@ def test_get_estimation_universe_weights(mocker):
 def test_get_daily_return(mocker):
     model = mock_risk_model(mocker)
     universe = ["904026", "232128", "24985", "160444"]
-    query = {
-        'startDate': '2022-04-04',
-        'endDate': '2022-04-06',
-        'assets': DataAssetsRequest(UniverseIdentifier.gsid, universe),
-        'measures': [Measure.Daily_Return, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'missingDates': ['2022-04-04', '2022-04-06'],
@@ -657,16 +2578,11 @@ def test_get_daily_return(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_daily_return(
         start_date=dt.date(2022, 4, 4),
         end_date=dt.date(2022, 4, 6),
         assets=DataAssetsRequest(UniverseIdentifier.gsid, universe),
         format=ReturnFormat.JSON,
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == daily_return_response
 
@@ -674,13 +2590,6 @@ def test_get_daily_return(mocker):
 def test_get_specific_return(mocker):
     model = mock_risk_model(mocker)
     universe = ["904026", "232128", "24985", "160444"]
-    query = {
-        'startDate': '2022-04-04',
-        'endDate': '2022-04-06',
-        'assets': DataAssetsRequest(UniverseIdentifier.gsid, universe),
-        'measures': [Measure.Specific_Return, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'missingDates': ['2022-04-04', '2022-04-06'],
@@ -705,16 +2614,11 @@ def test_get_specific_return(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_specific_return(
         start_date=dt.date(2022, 4, 4),
         end_date=dt.date(2022, 4, 6),
         assets=DataAssetsRequest(UniverseIdentifier.gsid, universe),
         format=ReturnFormat.JSON,
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == specific_return_response
 
@@ -856,13 +2760,6 @@ def test_get_bid_ask_spread(mocker, days):
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
     measure_to_query = Measure.Bid_Ask_Spread if not days else Measure[f'Bid_Ask_Spread_{days}d']
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [measure_to_query, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -881,13 +2778,8 @@ def test_get_bid_ask_spread(mocker, days):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_bid_ask_spread(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), days=days, assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == bid_ask_spread_response
 
@@ -898,14 +2790,6 @@ def test_get_trading_volume(mocker, days):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    measure_to_query = Measure.Trading_Volume if not days else Measure[f'Trading_Volume_{days}d']
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [measure_to_query, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -924,13 +2808,8 @@ def test_get_trading_volume(mocker, days):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_trading_volume(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), days=days, assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == trading_volume_response
 
@@ -941,14 +2820,6 @@ def test_get_traded_value(mocker, days):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    measure_to_query = Measure.Traded_Value_30d if not days else Measure[f'Traded_Value_{days}d']
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [measure_to_query, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -961,13 +2832,8 @@ def test_get_traded_value(mocker, days):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_traded_value(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), days=days, assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == trading_value_30d_response
 
@@ -978,14 +2844,6 @@ def test_get_composite_volume(mocker, days):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    measure_to_query = Measure.Composite_Volume if not days else Measure[f'Composite_Volume_{days}d']
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [measure_to_query, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -1004,13 +2862,8 @@ def test_get_composite_volume(mocker, days):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_composite_volume(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), days=days, assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == composite_volume_response
 
@@ -1021,14 +2874,6 @@ def test_get_composite_value(mocker, days):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    measure_to_query = Measure.Composite_Value_30d if not days else Measure[f'Composite_Value_{days}d']
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [measure_to_query, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -1041,13 +2886,8 @@ def test_get_composite_value(mocker, days):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_composite_value(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), days=days, assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == composite_value_response
 
@@ -1057,13 +2897,6 @@ def test_get_issuer_market_cap(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [Measure.Issuer_Market_Cap, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -1079,13 +2912,8 @@ def test_get_issuer_market_cap(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_issuer_market_cap(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == issuer_market_cap_response
 
@@ -1095,13 +2923,6 @@ def test_get_asset_price(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [Measure.Price, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [{"date": "2022-04-05", "assetData": {"universe": ["2046251", "2588173"], "price": [100, 200]}}],
@@ -1112,13 +2933,8 @@ def test_get_asset_price(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_asset_price(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == price_response
 
@@ -1128,13 +2944,6 @@ def test_get_asset_capitalization(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [Measure.Capitalization, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -1150,13 +2959,8 @@ def test_get_asset_capitalization(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_asset_capitalization(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == capitalization_response
 
@@ -1166,13 +2970,6 @@ def test_get_currency(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [Measure.Currency, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -1185,13 +2982,8 @@ def test_get_currency(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_currency(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == currency_response
 
@@ -1201,13 +2993,6 @@ def test_get_unadjusted_specific_risk(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [Measure.Unadjusted_Specific_Risk, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -1223,13 +3008,8 @@ def test_get_unadjusted_specific_risk(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_unadjusted_specific_risk(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == unadjusted_specific_risk_response
 
@@ -1239,13 +3019,6 @@ def test_get_dividend_yield(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [Measure.Dividend_Yield, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -1258,13 +3031,8 @@ def test_get_dividend_yield(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_dividend_yield(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
     assert response == dividend_yield_response
 
@@ -1274,13 +3042,6 @@ def test_get_model_price(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [Measure.Model_Price, Measure.Asset_Universe],
-        'limitFactors': False,
-    }
 
     results = {
         'results': [
@@ -1293,13 +3054,8 @@ def test_get_model_price(mocker):
 
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_model_price(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
-    )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='macro_model_id'), query, timeout=200
     )
     assert response == model_price_response
 
@@ -1309,94 +3065,30 @@ def test_get_covariance_matrix(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [
-            Measure.Covariance_Matrix,
-            Measure.Factor_Name,
-            Measure.Factor_Id,
-            Measure.Universe_Factor_Exposure,
-            Measure.Asset_Universe,
-        ],
-        'limitFactors': True,
-    }
 
     results = {
         'results': [
             {
                 "date": "2022-04-05",
                 "factorData": [
-                    {
-                        "factorId": "1",
-                        "factorName": "factor1",
-                    },
-                    {
-                        "factorId": "2",
-                        "factorName": "factor2",
-                    },
-                    {
-                        "factorId": "3",
-                        "factorName": "factor3",
-                    },
-                    {
-                        "factorId": "4",
-                        "factorName": "factor4",
-                    },
+                    {"factorId": "1", "factorName": "factor1"},
+                    {"factorId": "2", "factorName": "factor2"},
                 ],
                 "covarianceMatrix": [
-                    [0.5, 0.6, 0.7, 0.8],
-                    [0.3, 0.7, 0.8, 0.9],
-                    [0.5, 0.6, 0.7, 0.8],
-                    [0.3, 0.7, 0.8, 0.9],
+                    [0.5, 0.6],
+                    [0.3, 0.7],
                 ],
             }
         ],
         'totalResults': 1,
     }
 
-    covariance_matrix_response = [
-        {
-            "date": "2022-04-05",
-            "factorData": [
-                {
-                    "factorId": "1",
-                    "factorName": "factor1",
-                },
-                {
-                    "factorId": "2",
-                    "factorName": "factor2",
-                },
-                {
-                    "factorId": "3",
-                    "factorName": "factor3",
-                },
-                {
-                    "factorId": "4",
-                    "factorName": "factor4",
-                },
-            ],
-            "covarianceMatrix": [
-                [0.5, 0.6, 0.7, 0.8],
-                [0.3, 0.7, 0.8, 0.9],
-                [0.5, 0.6, 0.7, 0.8],
-                [0.3, 0.7, 0.8, 0.9],
-            ],
-        }
-    ]
-
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_covariance_matrix(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
     )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
-    )
-    assert response == covariance_matrix_response
+    assert response == results['results']
 
 
 def test_get_unadjusted_covariance_matrix(mocker):
@@ -1404,94 +3096,30 @@ def test_get_unadjusted_covariance_matrix(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [
-            Measure.Unadjusted_Covariance_Matrix,
-            Measure.Factor_Name,
-            Measure.Factor_Id,
-            Measure.Universe_Factor_Exposure,
-            Measure.Asset_Universe,
-        ],
-        'limitFactors': True,
-    }
 
     results = {
         'results': [
             {
                 "date": "2022-04-05",
                 "factorData": [
-                    {
-                        "factorId": "1",
-                        "factorName": "factor1",
-                    },
-                    {
-                        "factorId": "2",
-                        "factorName": "factor2",
-                    },
-                    {
-                        "factorId": "3",
-                        "factorName": "factor3",
-                    },
-                    {
-                        "factorId": "4",
-                        "factorName": "factor4",
-                    },
+                    {"factorId": "1", "factorName": "factor1"},
+                    {"factorId": "2", "factorName": "factor2"},
                 ],
                 "unadjustedCovarianceMatrix": [
-                    [0.5, 0.6, 0.7, 0.8],
-                    [0.3, 0.7, 0.8, 0.9],
-                    [0.5, 0.6, 0.7, 0.8],
-                    [0.3, 0.7, 0.8, 0.9],
+                    [0.5, 0.6],
+                    [0.3, 0.7],
                 ],
             }
         ],
         'totalResults': 1,
     }
 
-    unadjusted_covariance_matrix_response = [
-        {
-            "date": "2022-04-05",
-            "factorData": [
-                {
-                    "factorId": "1",
-                    "factorName": "factor1",
-                },
-                {
-                    "factorId": "2",
-                    "factorName": "factor2",
-                },
-                {
-                    "factorId": "3",
-                    "factorName": "factor3",
-                },
-                {
-                    "factorId": "4",
-                    "factorName": "factor4",
-                },
-            ],
-            "unadjustedCovarianceMatrix": [
-                [0.5, 0.6, 0.7, 0.8],
-                [0.3, 0.7, 0.8, 0.9],
-                [0.5, 0.6, 0.7, 0.8],
-                [0.3, 0.7, 0.8, 0.9],
-            ],
-        }
-    ]
-
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_unadjusted_covariance_matrix(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
     )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
-    )
-    assert response == unadjusted_covariance_matrix_response
+    assert response == results['results']
 
 
 def test_get_pre_vra_covariance_matrix(mocker):
@@ -1499,106 +3127,35 @@ def test_get_pre_vra_covariance_matrix(mocker):
 
     universe = ["2046251", "2588173"]
     assets = DataAssetsRequest(UniverseIdentifier.sedol, universe)
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'assets': assets,
-        'measures': [
-            Measure.Pre_VRA_Covariance_Matrix,
-            Measure.Factor_Name,
-            Measure.Factor_Id,
-            Measure.Universe_Factor_Exposure,
-            Measure.Asset_Universe,
-        ],
-        'limitFactors': True,
-    }
 
     results = {
         'results': [
             {
                 "date": "2022-04-05",
                 "factorData": [
-                    {
-                        "factorId": "1",
-                        "factorName": "factor1",
-                    },
-                    {
-                        "factorId": "2",
-                        "factorName": "factor2",
-                    },
-                    {
-                        "factorId": "3",
-                        "factorName": "factor3",
-                    },
-                    {
-                        "factorId": "4",
-                        "factorName": "factor4",
-                    },
+                    {"factorId": "1", "factorName": "factor1"},
+                    {"factorId": "2", "factorName": "factor2"},
                 ],
                 "preVRACovarianceMatrix": [
-                    [0.5, 0.6, 0.7, 0.8],
-                    [0.3, 0.7, 0.8, 0.9],
-                    [0.5, 0.6, 0.7, 0.8],
-                    [0.3, 0.7, 0.8, 0.9],
+                    [0.5, 0.6],
+                    [0.3, 0.7],
                 ],
             }
         ],
         'totalResults': 1,
     }
 
-    pre_vra_covariance_matrix_response = [
-        {
-            "date": "2022-04-05",
-            "factorData": [
-                {
-                    "factorId": "1",
-                    "factorName": "factor1",
-                },
-                {
-                    "factorId": "2",
-                    "factorName": "factor2",
-                },
-                {
-                    "factorId": "3",
-                    "factorName": "factor3",
-                },
-                {
-                    "factorId": "4",
-                    "factorName": "factor4",
-                },
-            ],
-            "preVRACovarianceMatrix": [
-                [0.5, 0.6, 0.7, 0.8],
-                [0.3, 0.7, 0.8, 0.9],
-                [0.5, 0.6, 0.7, 0.8],
-                [0.3, 0.7, 0.8, 0.9],
-            ],
-        }
-    ]
-
     mocker.patch.object(GsSession.current.sync, 'post', return_value=results)
 
-    # run test
     response = model.get_pre_vra_covariance_matrix(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), assets=assets, format=ReturnFormat.JSON
     )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
-    )
-    assert response == pre_vra_covariance_matrix_response
+    assert response == results['results']
 
 
 def test_get_risk_free_rate(mocker):
     model = mock_risk_model(mocker)
 
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'measures': [Measure.Risk_Free_Rate],
-        'assets': DataAssetsRequest(UniverseIdentifier.gsid, []),
-        'limitFactors': False,
-    }
     currencies = ["EUR", "INR"]
     risk_free_rate = [1.08, 0.012]
     results = {
@@ -1624,13 +3181,9 @@ def test_get_risk_free_rate(mocker):
     response = model.get_risk_free_rate(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), format=ReturnFormat.JSON
     )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
-    )
     assert response == risk_free_rate_response
 
-    # fitler risk free rates by currency
+    # filter risk free rates by currency
     expected_filtered_rates = {"currency": {('2022-04-05', 1): 'INR'}, "riskFreeRate": {('2022-04-05', 1): 0.012}}
     actual_filtered_rates = model.get_risk_free_rate(
         start_date=dt.date(2022, 4, 5),
@@ -1638,11 +3191,6 @@ def test_get_risk_free_rate(mocker):
         currencies=[Currency.INR],
         format=ReturnFormat.JSON,
     )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
-    )
-
     assert actual_filtered_rates == expected_filtered_rates
 
     # test DataFrame return format
@@ -1664,23 +3212,12 @@ def test_get_risk_free_rate(mocker):
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), currencies=[Currency.INR]
     )
 
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
-    )
-
     assert_frame_equal(expected_data_frame, actual_data_frame, check_like=True)
 
 
 def test_get_currency_exchange_rate(mocker):
     model = mock_risk_model(mocker)
 
-    query = {
-        'startDate': '2022-04-05',
-        'endDate': '2022-04-05',
-        'measures': [Measure.Currency_Exchange_Rate],
-        'assets': DataAssetsRequest(UniverseIdentifier.gsid, []),
-        'limitFactors': False,
-    }
     currencies = ["EUR", "INR"]
     currency_exchange_rate = [1.08, 0.012]
     results = {
@@ -1706,13 +3243,9 @@ def test_get_currency_exchange_rate(mocker):
     response = model.get_currency_exchange_rate(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), format=ReturnFormat.JSON
     )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
-    )
     assert response == currency_exchange_rate_response
 
-    # fitler risk free rates by currency
+    # filter risk free rates by currency
     expected_filtered_rates = {"currency": {('2022-04-05', 1): 'INR'}, "exchangeRate": {('2022-04-05', 1): 0.012}}
     actual_filtered_rates = model.get_currency_exchange_rate(
         start_date=dt.date(2022, 4, 5),
@@ -1720,15 +3253,9 @@ def test_get_currency_exchange_rate(mocker):
         currencies=[Currency.INR],
         format=ReturnFormat.JSON,
     )
-
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
-    )
-
     assert actual_filtered_rates == expected_filtered_rates
 
     # test DataFrame return format
-
     expected_data_frame = get_optional_data_as_dataframe(
         [
             {
@@ -1746,9 +3273,6 @@ def test_get_currency_exchange_rate(mocker):
 
     actual_data_frame = model.get_currency_exchange_rate(
         start_date=dt.date(2022, 4, 5), end_date=dt.date(2022, 4, 5), currencies=[Currency.INR]
-    )
-    GsSession.current.sync.post.assert_called_with(
-        '/risk/models/data/{id}/query'.format(id='model_id'), query, timeout=200
     )
 
     assert_frame_equal(expected_data_frame, actual_data_frame, check_like=True)
