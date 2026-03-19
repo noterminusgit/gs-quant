@@ -1878,5 +1878,18 @@ class TestFactorRiskReportGetFactorPnl:
             assert isinstance(result, pd.DataFrame)
 
 
+class TestGetAumNetBranch:
+    """Cover branch [801,-780]: aum_source is not any of the known enums -> returns None."""
+
+    def test_get_aum_unknown_source(self):
+        """When aum_source is an unknown value -> none of the if branches match [801,-780]."""
+        from gs_quant.markets.report import PerformanceReport
+        report = PerformanceReport.__new__(PerformanceReport)
+        report._PerformanceReport__report = MagicMock()
+        with patch.object(PerformanceReport, 'get_aum_source', return_value='UnknownSource'):
+            result = report.get_aum(dt.date(2023, 1, 1), dt.date(2023, 12, 31))
+        assert result is None
+
+
 if __name__ == '__main__':
     pytest.main(args=[__file__])

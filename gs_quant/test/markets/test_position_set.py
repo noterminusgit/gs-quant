@@ -1930,5 +1930,122 @@ class TestPriceManyBranches:
         assert ps.date == dt.date(2024, 4, 30)
 
 
+class TestResolveManyNameAndAssetIdBranches:
+    """Cover branches [1264,1266] and [1266,1268]: name and asset_id columns present -> dropped."""
+
+    def test_resolve_many_with_name_and_asset_id_columns(self, mocker):
+        """When positions have name AND asset_id -> columns are dropped before resolve."""
+        position_sets = [
+            PositionSet(
+                date=dt.date(2024, 4, 30),
+                reference_notional=1000,
+                positions=[
+                    Position(identifier='GS UN', weight=0.5, name='Goldman', asset_id='MA1'),
+                    Position(identifier='AAPL UW', weight=0.5, name='Apple', asset_id='MA2'),
+                ],
+            ),
+        ]
+        xref_results = [
+            {"assetId": "MA1", "bbid": "GS UN", "delisted": 'no',
+             "startDate": "1952-01-01", "endDate": "2952-12-31"},
+            {"assetId": "MA2", "bbid": "AAPL UW", "delisted": 'no',
+             "startDate": "1952-01-01", "endDate": "2952-12-31"},
+        ]
+        resolved_positions = [
+            {"assetId": "MA1", "name": "GS", "bbid": "GS UN",
+             "tradingRestriction": None,
+             "asOfDate": dt.datetime(2952, 12, 31),
+             "startDate": dt.datetime(1952, 1, 1),
+             "endDate": dt.datetime(2952, 12, 31)},
+            {"assetId": "MA2", "name": "Apple", "bbid": "AAPL UW",
+             "tradingRestriction": False,
+             "asOfDate": dt.datetime(2952, 12, 31),
+             "startDate": dt.datetime(1952, 1, 1),
+             "endDate": dt.datetime(2952, 12, 31)},
+        ]
+        mocker.patch.object(
+            position_set_module, "_get_asset_temporal_xrefs",
+            return_value=(pd.DataFrame(xref_results), "bbid"),
+        )
+        mocker.patch.object(
+            position_set_module, "_group_temporal_xrefs_into_discrete_time_ranges",
+        )
+        mocker.patch.object(
+            position_set_module, "_resolve_many_assets",
+            return_value=pd.DataFrame(resolved_positions),
+        )
+        PositionSet.resolve_many(position_sets)
+        assert len(position_sets[0].positions) == 2
+
+
+class TestResolveManyNoRefNotional:
+    """Cover branch [1308,1312]: reference_notional NOT in columns -> skip drop quantity."""
+
+    def test_resolve_many_no_reference_notional(self, mocker):
+        """Positions without reference_notional -> skip the ref_notional block."""
+        position_sets = [
+            PositionSet(
+                date=dt.date(2024, 4, 30),
+                positions=[
+                    Position(identifier='GS UN', quantity=100),
+                ],
+            ),
+        ]
+        xref_results = [
+            {"assetId": "MA1", "bbid": "GS UN", "delisted": 'no',
+             "startDate": "1952-01-01", "endDate": "2952-12-31"},
+        ]
+        resolved_positions = [
+            {"assetId": "MA1", "name": "GS", "bbid": "GS UN",
+             "tradingRestriction": None,
+             "asOfDate": dt.datetime(2952, 12, 31),
+             "startDate": dt.datetime(1952, 1, 1),
+             "endDate": dt.datetime(2952, 12, 31)},
+        ]
+        mocker.patch.object(
+            position_set_module, "_get_asset_temporal_xrefs",
+            return_value=(pd.DataFrame(xref_results), "bbid"),
+        )
+        mocker.patch.object(
+            position_set_module, "_group_temporal_xrefs_into_discrete_time_ranges",
+        )
+        mocker.patch.object(
+            position_set_module, "_resolve_many_assets",
+            return_value=pd.DataFrame(resolved_positions),
+        )
+        PositionSet.resolve_many(position_sets)
+        assert len(position_sets[0].positions) == 1
+
+
+class TestPriceManyQuantityNoMissing:
+    """Cover branch [1461,1466]: Quantity strategy, all quantities present -> no warning."""
+
+    def test_price_many_quantity_all_present(self, mocker):
+        """Quantity strategy with all quantities present -> skip warning, jump to 1466."""
+        ps = PositionSet(
+            date=dt.date(2024, 4, 30),
+            positions=[
+                Position(identifier='A', asset_id='MA1', name='A', quantity=100),
+            ],
+        )
+        pricing_results = [
+            {
+                'date': '2024-04-30',
+                'positions': [
+                    {'assetId': 'MA1', 'weight': 1.0, 'closePrice': 500,
+                     'fxClosePrice': 1, 'quantity': 100, 'notional': 50000,
+                     'referenceWeight': 1.0},
+                ],
+                'targetNotional': 50000,
+            },
+        ]
+        mocker.patch.object(GsPriceApi, 'price_many_positions', return_value=pricing_results)
+        with patch('gs_quant.markets.position_set._logger') as mock_logger:
+            PositionSet.price_many([ps], weighting_strategy=PositionSetWeightingStrategy.Quantity)
+            # No warning should be issued since all quantities are present
+            for call in mock_logger.warning.call_args_list:
+                assert "quantities" not in str(call)
+
+
 if __name__ == '__main__':
     pytest.main(args=[__file__])

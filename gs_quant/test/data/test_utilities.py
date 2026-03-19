@@ -721,3 +721,59 @@ class TestSecmasterXrefFormatter:
         # Only 1 start event, no end event
         assert len(events) == 1
         assert events[0].event_type == SecmasterXrefFormatter.EventType.START
+
+    # -- Branch [393,391]: end event for identifier not in active_identifiers --
+
+    def test_end_event_identifier_not_in_active(self):
+        """Branch [393,391]: end event for identifier_type not in active_identifiers is skipped."""
+        # This happens when an end event arrives for an identifier that was already
+        # removed or was never added (e.g., overlapping records for same type).
+        # We can construct a scenario where two records of the same type overlap
+        # such that the first end event removes the identifier and the second
+        # end event finds it missing.
+        data = {
+            'entity1': [
+                {
+                    'type': 'ticker',
+                    'value': 'A',
+                    'startDate': '2020-01-01',
+                    'endDate': '2020-06-30',
+                },
+                {
+                    'type': 'ticker',
+                    'value': 'B',
+                    'startDate': '2020-03-01',
+                    'endDate': '2020-06-30',
+                },
+            ]
+        }
+        result = SecmasterXrefFormatter.convert(data)
+        # Should not raise; the second end event finds ticker already removed
+        assert 'entity1' in result
+
+    # -- Branch [441,442]: _add_one_day with 9999-12-31 (not INFINITY_DATE constant) --
+
+    def test_add_one_day_9999_12_31(self):
+        """Branch [441,442]: date_obj.year==9999, month==12, day==31 returns None."""
+        # _add_one_day checks for INFINITY_DATE constant first, then for the actual date
+        # We need to hit line 441 where the date parses as 9999-12-31 but isn't equal
+        # to the INFINITY_DATE constant. Actually INFINITY_DATE IS "9999-12-31", so
+        # line 438 catches it first. The check at line 441 is for dates that somehow
+        # parse to that value without being the constant string.
+        # Actually if date_str is '9999-12-31', line 438 returns None.
+        # Line 441 is only reached if date_str != '9999-12-31' but parses to year=9999, month=12, day=31.
+        # That's impossible with strptime('%Y-%m-%d'). This branch is unreachable.
+        # But let's at least call _add_one_day with a normal date to exercise the function.
+        result = SecmasterXrefFormatter._add_one_day('2020-06-15')
+        assert result == '2020-06-16'
+
+        # And with INFINITY_DATE
+        result = SecmasterXrefFormatter._add_one_day('9999-12-31')
+        assert result is None
+
+    # -- _add_one_day with ValueError/OverflowError --
+
+    def test_add_one_day_invalid_date(self):
+        """Branch: ValueError in _add_one_day returns None."""
+        result = SecmasterXrefFormatter._add_one_day('not-a-date')
+        assert result is None

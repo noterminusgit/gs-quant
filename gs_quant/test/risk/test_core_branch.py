@@ -235,3 +235,16 @@ class TestSortRiskDateColumn:
         })
         result = sort_risk(df)
         assert result.index.name != 'date'
+
+
+# ===========================================================================
+# MQVSValidatorDefnsWithInfo [492,-481]: value is falsy => no assignment
+# ===========================================================================
+
+class TestMQVSValidatorDefnsWithInfo:
+    def test_falsy_value_no_validators_set(self):
+        """Branch [492,-481]: value is None -> both if/elif are False, no validators assigned."""
+        from gs_quant.risk.core import MQVSValidatorDefnsWithInfo
+        rk = _risk_key()
+        obj = MQVSValidatorDefnsWithInfo(rk, value=None)
+        assert not hasattr(obj, 'validators') or obj.validators is None or obj.validators == ()

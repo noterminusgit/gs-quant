@@ -67,3 +67,20 @@ def test_decode_dataframe_result():
             dtype=np.int64,
         ),
     )
+
+
+def test_decode_series_result_numeric_index():
+    """Branch [31,32]: _convert_list_to_dates with non-string list -> return as-is."""
+    enc = {'index': (0, 1, 2), 'name': 'test', 'values': (10, 20, 30)}
+    s = decode_series_result(enc)
+    assert_series_equal(
+        s,
+        pd.Series(data=[10, 20, 30], index=[0, 1, 2], name='test'),
+    )
+
+
+def test_decode_series_result_empty_index():
+    """Branch [31,32]: _convert_list_to_dates with empty list -> return as-is."""
+    enc = {'index': (), 'name': 'test', 'values': ()}
+    s = decode_series_result(enc)
+    assert len(s) == 0

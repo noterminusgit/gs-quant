@@ -1726,12 +1726,13 @@ def test_parent_basket_property_fetches_from_clone_parent_id(mocker):
 
 
 def test_finish_initialization_skips_initial_positions(mocker):
-    """Branch [1065,1073]: __initial_positions already set -> skip fetching positions"""
+    """Branch [1065,1073]: __initial_positions already set -> skip fetching positions.
+    pydash has(self, '__initial_positions') checks the literal non-mangled attribute."""
     mock_session()
     mock_basket_init(mocker, user_ea)
     basket = Basket.get(ticker)
-    # Set __initial_positions so the block is skipped
-    basket._Basket__initial_positions = set()
+    # pydash has() checks literal non-mangled attribute name
+    setattr(basket, '__initial_positions', set())
     # Also set up initial_state to have initial_price and publish_to_bloomberg
     basket._Basket__initial_state = {
         'divisor': 1000,
@@ -1739,21 +1740,22 @@ def test_finish_initialization_skips_initial_positions(mocker):
         'initial_price': 100,
         'publish_to_bloomberg': True,
     }
-    # Set __entitlements to skip that block too
-    basket._Basket__entitlements = MagicMock()
+    # Set non-mangled __entitlements to skip that block too
+    setattr(basket, '__entitlements', MagicMock())
     basket._Basket__finish_initialization()
     # If we got here without error, the positions fetch was skipped
 
 
 def test_finish_initialization_skips_entitlements(mocker):
-    """Branch [1089,1091]: __entitlements already set -> skip fetching entitlements"""
+    """Branch [1089,1091]: __entitlements already set -> skip fetching entitlements.
+    pydash has(self, '__entitlements') checks the literal non-mangled attribute."""
     mock_session()
     mock_basket_init(mocker, user_ea)
     basket = Basket.get(ticker)
-    # Set __entitlements so that block is skipped
-    basket._Basket__entitlements = MagicMock()
-    # Ensure initial_positions is set
-    basket._Basket__initial_positions = set()
+    # Set non-mangled __entitlements so pydash has() returns True
+    setattr(basket, '__entitlements', MagicMock())
+    # Ensure initial_positions is set (non-mangled for pydash)
+    setattr(basket, '__initial_positions', set())
     basket._Basket__initial_state = {
         'divisor': 1000,
         'position_set': position_set,

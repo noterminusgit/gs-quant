@@ -376,3 +376,23 @@ class TestDataCoordinate:
         coord = DataCoordinate.from_dict(obj)
         # Unknown dimension keys should be stored as strings
         assert 'unknownDim' in coord.dimensions
+
+
+class TestAsDict:
+    """Cover branch [212,213]: as_dict with Enum dimension key."""
+
+    def test_as_dict_enum_key(self):
+        """When dimension key is an Enum -> use key.value [212,213]."""
+        from enum import Enum as StdEnum
+
+        class DimKey(StdEnum):
+            TENOR = 'tenor'
+
+        coord = DataCoordinate(
+            id_='DS1',
+            measure='price',
+            dimensions={DimKey.TENOR: '1m'},
+        )
+        result = coord.as_dict()
+        assert 'tenor' in result.get('dimensions', {})
+        assert result['dimensions']['tenor'] == '1m'

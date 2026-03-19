@@ -563,7 +563,7 @@ class TestAddWeightedTradeActionPostInit:
         p.clone.assert_not_called()
 
     def test_transaction_cost_exit_defaults_to_transaction_cost(self):
-        """When transaction_cost_exit is None -> set to transaction_cost [291,-279]."""
+        """When transaction_cost_exit is None -> set to transaction_cost."""
         p = make_mock_priceable(name=None)
         from gs_quant.backtests.actions import AddWeightedTradeAction
         action = AddWeightedTradeAction(
@@ -573,6 +573,19 @@ class TestAddWeightedTradeActionPostInit:
         )
         assert action.transaction_cost_exit is not None
         assert action.transaction_cost_exit == action.transaction_cost
+
+    def test_transaction_cost_exit_provided(self):
+        """When transaction_cost_exit is provided (not None) -> skip default [291,-279]."""
+        p = make_mock_priceable(name=None)
+        from gs_quant.backtests.actions import AddWeightedTradeAction, ConstantTransactionModel
+        custom_cost = ConstantTransactionModel(99)
+        action = AddWeightedTradeAction(
+            priceables=Portfolio([p]),
+            name='TestAction',
+            transaction_cost_exit=custom_cost,
+        )
+        assert action.transaction_cost_exit is custom_cost
+        assert action.transaction_cost_exit != action.transaction_cost
 
 
 class TestRebalanceActionPostInit:
@@ -615,3 +628,21 @@ class TestRebalanceActionPostInit:
             transaction_cost_exit=None,
         )
         assert action.transaction_cost_exit == action.transaction_cost
+
+
+class TestRebalanceActionTransactionCostExitProvided:
+    """Cover branch [488,493] exit path: transaction_cost_exit is already set."""
+
+    def test_transaction_cost_exit_not_none(self):
+        """When transaction_cost_exit is provided -> skip defaulting [488,493]."""
+        from gs_quant.backtests.actions import ConstantTransactionModel
+        p = make_mock_priceable(name='Swap')
+        p.name = 'Swap'
+        p.unresolved = MagicMock()
+        custom_cost = ConstantTransactionModel(42)
+        action = RebalanceAction(
+            priceable=p,
+            name='Rebal',
+            transaction_cost_exit=custom_cost,
+        )
+        assert action.transaction_cost_exit is custom_cost

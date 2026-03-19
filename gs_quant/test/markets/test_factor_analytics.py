@@ -817,3 +817,91 @@ class TestCreateFactorHeatmapComparison:
         # Both traces should have 2 factors each
         assert len(fig.data[0].y) == 2
         assert len(fig.data[1].y) == 2
+
+
+# ── convert_hedge_factor_exposures branch [143,144] ──────────────────────
+
+class TestConvertHedgeFactorExposuresBranch:
+    """Branch [143,144]: second `if not style_factors` is dead code (always False after line 140).
+    We can only cover the True path at line 140 (raise)."""
+
+    def setup_method(self):
+        self.fa = FactorAnalytics('TEST_MODEL')
+
+    def test_empty_style_factors_raises(self):
+        """Branch [140,141]: empty style_factors raises MqValueError."""
+        with pytest.raises(MqValueError, match="Style factor exposures data is empty"):
+            self.fa.convert_hedge_factor_exposures([])
+
+    def test_none_style_factors_raises(self):
+        """Branch [140,141]: None style_factors raises MqValueError."""
+        with pytest.raises(MqValueError, match="Style factor exposures data is empty"):
+            self.fa.convert_hedge_factor_exposures(None)
+
+    def test_valid_style_factors(self):
+        """Covers the normal path through convert_hedge_factor_exposures."""
+        style_factors = [
+            {'factor': 'Momentum', 'exposure': 0.5},
+            {'factor': 'Value', 'exposure': -0.3},
+        ]
+        result = self.fa.convert_hedge_factor_exposures(style_factors)
+        assert 'factorExposureBuckets' in result
+        assert result['factorExposureBuckets'][0]['name'] == 'Style'
+        assert len(result['factorExposureBuckets'][0]['subFactors']) == 2
+
+
+# ── create_performance_chart branches [374,375] [376,377] ────────────────
+
+class TestCreateDynamicPerformanceChartFallbackDates:
+    """Branches [374,375] and [376,377]: cumulative/normalized dates empty but values non-empty.
+    These branches are dead code since dates and values are populated in the same loop.
+    We cover the function with edge cases near these lines."""
+
+    def setup_method(self):
+        self.fa = FactorAnalytics('TEST_MODEL')
+
+    def test_non_string_date_items_skipped(self):
+        """Items with non-string first element are skipped, leaving both dates and values empty."""
+        factor_analysis = {
+            'timeseriesData': [
+                {
+                    'name': 'total',
+                    'cumulativePnl': [[123, 100], [456, 200]],  # int dates, not str
+                    'normalizedPerformance': [[789, 1.0]],  # int date
+                }
+            ],
+        }
+        fig = self.fa.create_dynamic_performance_chart(factor_analysis)
+        # Both cumulative_dates and cumulative_values are empty (items failed str check)
+        # So the "No cumulative PnL or normalized performance data" annotation is shown
+        assert isinstance(fig, go.Figure)
+
+    def test_empty_cumulative_and_normalized(self):
+        """No cumulative or normalized data returns annotation figure."""
+        factor_analysis = {
+            'timeseriesData': [
+                {
+                    'name': 'total',
+                    'cumulativePnl': [],
+                    'normalizedPerformance': [],
+                }
+            ],
+        }
+        fig = self.fa.create_dynamic_performance_chart(factor_analysis)
+        assert isinstance(fig, go.Figure)
+
+    def test_with_valid_data(self):
+        """Normal case with valid string dates and values."""
+        factor_analysis = {
+            'timeseriesData': [
+                {
+                    'name': 'total',
+                    'cumulativePnl': [['2024-01-01', 100], ['2024-01-02', 200]],
+                    'normalizedPerformance': [['2024-01-01', 1.0], ['2024-01-02', 1.02]],
+                }
+            ],
+        }
+        fig = self.fa.create_dynamic_performance_chart(factor_analysis)
+        assert isinstance(fig, go.Figure)
+        # Should have traces for cumulative and normalized
+        assert len(fig.data) >= 1

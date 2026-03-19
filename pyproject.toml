@@ -145,6 +145,11 @@ tag_prefix = "release-"
 parentdir_prefix = "gs_quant-"
 
 
+[tool.pytest.ini_options]
+testpaths = ["gs_quant/test"]
+addopts = "--cov=gs_quant --cov-config=.coveragerc --cov-report=term-missing --cov-report=html -rsx"
+asyncio_mode = "auto"
+
 [tool.ruff]
 # Setting can be seen here
 # https://docs.astral.sh/ruff/settings/

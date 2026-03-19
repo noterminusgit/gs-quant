@@ -2630,3 +2630,20 @@ class TestOptimizerStrategyBranchPhase6:
         s = self._make_strategy(result=None)
         with pytest.raises(MqValueError, match='Please run the optimization'):
             s.get_hedge_constituents_by_direction()
+
+    @patch('gs_quant.markets.optimizer.GsSession')
+    def test_to_dict_constraints_with_none_value(self, mock_gs):
+        """[1677,1676] constraints dict has a key with None value -> skip that key."""
+        mock_gs.current.sync.post.return_value = {'actualNotional': 10000000}
+        constraints = MagicMock()
+        constraints.to_dict.return_value = {'someConstraint': None, 'other': 'val'}
+        settings = MagicMock()
+        settings.to_dict.return_value = {}
+        s = self._make_strategy(constraints=constraints, settings=settings)
+        s._OptimizerStrategy__constraints = constraints
+        s._OptimizerStrategy__settings = settings
+        d = s.to_dict()
+        # 'someConstraint' should NOT be in parameters since its value is None
+        assert 'someConstraint' not in d['parameters']
+        # 'other' should be in parameters since its value is not None
+        assert d['parameters']['other'] == 'val'

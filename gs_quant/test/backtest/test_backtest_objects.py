@@ -1977,3 +1977,66 @@ class TestOisFixingCashAccrualModel:
         finally:
             bo.ois_fixings.clear()
             bo.ois_fixings.update(original_fixings)
+
+
+class TestCostAggregationFuncMinFallthrough:
+    """Cover branch [484,486]: AggregateTransactionModel with unknown aggregate_type -> default sum."""
+
+    def test_cost_aggregation_func_unknown_type(self):
+        """When aggregate_type is not SUM/MAX/MIN -> falls through to return sum [484,486]."""
+        agg_model = AggregateTransactionModel(
+            transaction_models=[ConstantTransactionModel(0)],
+            aggregate_type=TransactionAggType.SUM,
+        )
+        # Override the aggregate_type to a non-standard value
+        agg_model.aggregate_type = MagicMock()
+        entry = TransactionCostEntry(
+            transaction_model=agg_model,
+            instruments=[MagicMock()],
+        )
+        result = entry.cost_aggregation_func
+        assert result is sum
+
+
+class TestGetCostByComponentElse:
+    """Cover branch [562,565]: cost_by_component where neither fixed==agg nor scaled==agg."""
+
+    def test_cost_by_component_else_raises(self):
+        """When aggregation func returns value != fixed_cost and != scaled_cost -> raises [562,565]."""
+        fixed_model = ConstantTransactionModel(10)
+        scaled_model = ScaledTransactionModel(1, scaling_level=1.0)
+        agg_model = AggregateTransactionModel(
+            transaction_models=[fixed_model, scaled_model],
+            aggregate_type=TransactionAggType.MAX,
+        )
+        mock_inst = MagicMock()
+        entry = TransactionCostEntry(
+            transaction_model=agg_model,
+            instruments=[mock_inst],
+        )
+        # Set up costs so fixed=10, scaled=5
+        entry._unit_cost_by_model_by_inst = {
+            fixed_model: {mock_inst: 10.0},
+            scaled_model: {mock_inst: 5.0},
+        }
+        entry._additional_scaling = 1.0
+        # Override cost_aggregation_func to return a value different from both fixed and scaled
+        # to trigger the else branch
+        with patch.object(type(entry), 'cost_aggregation_func', new_callable=PropertyMock) as mock_func:
+            def weird_agg(lst):
+                return -999  # neither fixed_cost nor scaled_cost
+            mock_func.return_value = weird_agg
+            with pytest.raises(ValueError, match="Unable to split cost"):
+                entry.get_cost_by_component()
+
+
+class TestOisFixingEmptyCurrencies:
+    """Cover branch [821,-820]: OisFixingCashAccrualModel with empty currencies dict."""
+
+    def test_get_accrued_value_empty_currencies(self):
+        """When current_value[0] has no keys -> for loop doesn't execute [821,-820]."""
+        model = OisFixingCashAccrualModel()
+        current_value = [{}]  # empty dict -> no currencies to iterate
+        to_state = MagicMock()
+        result = model.get_accrued_value(current_value, to_state)
+        assert result is None

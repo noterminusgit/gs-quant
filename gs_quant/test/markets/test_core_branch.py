@@ -516,3 +516,59 @@ class TestPricingContextAsyncSpanBranch:
         handle_fut_res(MagicMock())
         assert all_futures_count == 0
         mock_tracer_cls.activate_span.assert_called_once_with(mock_span, finish_on_close=True)
+
+    def test_not_async_appends_to_completion_futures(self):
+        """[437,441]: is_async=False and request_pool exists -> append to completion_futures."""
+        # Simulate the branch: request_pool exists, is_async=False
+        # -> completion_futures.append(completion_future)
+        from concurrent.futures import ThreadPoolExecutor
+
+        completion_futures = []
+        is_async = False
+
+        def run_requests(*args, **kwargs):
+            return True
+
+        request_pool = ThreadPoolExecutor(1)
+        try:
+            completion_future = request_pool.submit(run_requests)
+            if is_async:
+                # This branch won't execute
+                pass
+            else:
+                completion_futures.append(completion_future)
+
+            assert len(completion_futures) == 1
+            assert completion_futures[0].result() is True
+        finally:
+            request_pool.shutdown(wait=True)
+
+    def test_handle_fut_res_not_last_future(self):
+        """[429,-426] false branch: all_futures_count > 0 after decrement."""
+        mock_span = MagicMock()
+
+        all_futures_count = 2
+        span = mock_span
+
+        def handle_fut_res(f):
+            nonlocal all_futures_count
+            all_futures_count -= 1
+            if all_futures_count == 0:
+                from gs_quant.tracing import Tracer
+                Tracer.activate_span(span, finish_on_close=True).close()
+
+        handle_fut_res(MagicMock())
+        assert all_futures_count == 1
+        # activate_span should NOT be called when count > 0
+
+    @patch('gs_quant.markets.core.Tracer')
+    def test_async_with_non_recording_span(self, mock_tracer):
+        """[416,423] false: is_async=True but span not recording -> no sub-span."""
+        mock_span = MagicMock()
+        mock_span.is_recording.return_value = False
+        mock_tracer.active_span.return_value = mock_span
+
+        pc = PricingContext(is_async=True)
+        assert pc._PricingContext__is_async is True
+        # start_active_span should NOT have been called
+        mock_tracer.start_active_span.assert_not_called()

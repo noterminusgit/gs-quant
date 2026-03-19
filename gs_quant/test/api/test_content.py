@@ -111,3 +111,15 @@ def test_get_text():
 
     # Assert
     assert actual == [(content.id, b64decode(content.content.body)) for content in contents]
+
+
+def test_convert_order_by_desc():
+    """Branch [165,166]: direction == OrderBy.DESC -> '>' prefix."""
+    result = GsContentApi._convert_order_by({'direction': OrderBy.DESC, 'field': 'createdTime'})
+    assert result == '>createdTime'
+
+
+def test_convert_order_by_asc():
+    """Complement: direction != OrderBy.DESC -> '<' prefix."""
+    result = GsContentApi._convert_order_by({'direction': OrderBy.ASC, 'field': 'createdTime'})
+    assert result == '<createdTime'
