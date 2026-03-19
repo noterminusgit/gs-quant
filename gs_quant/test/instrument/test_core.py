@@ -515,3 +515,229 @@ class TestInstrumentCalc:
             # Should return the future itself, not the result
             assert isinstance(result, PricingFuture)
             assert result.result() == 50.0
+
+    def test_calc_deprecated_measure_warning(self):
+        """calc warns for deprecated measures (lines 189, 193-200)."""
+        import warnings
+
+        inst = DummyInstrument(42.0)
+        measure = RiskMeasure(name='FakeDeprecated')
+
+        future = self._make_pricing_future(10.0)
+        mock_ctx = self._make_mock_ctx(future)
+
+        with patch.object(type(inst), '_pricing_context', new_callable=PropertyMock, return_value=mock_ctx), \
+             patch.object(type(inst), '_return_future', new_callable=PropertyMock, return_value=False), \
+             patch('gs_quant.instrument.core.Scenario') as mock_scenario, \
+             patch.object(RiskMeasure, 'pricing_context', new_callable=PropertyMock, return_value=mock_ctx), \
+             patch('gs_quant.instrument.core.DEPRECATED_MEASURES', {'FakeDeprecated': 'NewMeasure'}):
+            mock_scenario.path = []
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter('always')
+                result = inst.calc(measure)
+                # Check that a DeprecationWarning was issued
+                deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+                assert len(deprecation_warnings) >= 1
+
+    def test_calc_fn_exception_handling(self):
+        """calc with fn= that raises an exception propagates it via the future."""
+        inst = DummyInstrument(42.0)
+        measure = RiskMeasure(name='TestMeasure')
+        future = self._make_pricing_future(100.0)
+        mock_ctx = self._make_mock_ctx(future)
+
+        def bad_fn(result):
+            raise ValueError('test error')
+
+        with patch.object(type(inst), '_pricing_context', new_callable=PropertyMock, return_value=mock_ctx), \
+             patch.object(type(inst), '_return_future', new_callable=PropertyMock, return_value=False), \
+             patch('gs_quant.instrument.core.Scenario') as mock_scenario, \
+             patch.object(RiskMeasure, 'pricing_context', new_callable=PropertyMock, return_value=mock_ctx):
+            mock_scenario.path = []
+            with pytest.raises(ValueError, match='test error'):
+                inst.calc(measure, fn=bad_fn)
+
+
+# ---------------------------------------------------------------------------
+# Instrument.resolve handle_result branches
+# ---------------------------------------------------------------------------
+
+class TestInstrumentResolveHandleResult:
+    def test_resolve_handle_result_error_value_not_historical(self):
+        """handle_result with ErrorValue, not historical, returns None."""
+        from gs_quant.base import InstrumentBase, RiskKey
+        inst = DummyInstrument(42.0)
+
+        rk = RiskKey('provider', dt.date(2021, 1, 1), None, None, None, None)
+        error_val = ErrorValue(rk, 'some error')
+
+        # We need to invoke handle_result by calling resolve and having calc invoke fn
+        with patch.object(Instrument, 'calc') as mock_calc:
+            def side_effect(risk_measure, fn=None):
+                if fn is not None:
+                    return fn(error_val)
+                return None
+            mock_calc.side_effect = side_effect
+            result = inst.resolve(in_place=False)
+            # handle_result: ret = result (ErrorValue), then ErrorValue branch sets ret = None (not historical)
+            assert result is None
+
+    def test_resolve_handle_result_none_result_not_historical(self):
+        """handle_result with None result, not historical, returns self."""
+        inst = DummyInstrument(42.0)
+
+        with patch.object(Instrument, 'calc') as mock_calc:
+            def side_effect(risk_measure, fn=None):
+                if fn is not None:
+                    return fn(None)
+                return None
+            mock_calc.side_effect = side_effect
+            result = inst.resolve(in_place=False)
+            # handle_result: ret = None (which is result), then None branch sets ret = self
+            assert result is inst
+
+    def test_resolve_handle_result_in_place_with_valid_result(self):
+        """handle_result with valid result, in_place=True, calls from_instance."""
+        inst = DummyInstrument(42.0)
+        mock_result = MagicMock()
+
+        with patch.object(Instrument, 'calc') as mock_calc:
+            def side_effect(risk_measure, fn=None):
+                if fn is not None:
+                    return fn(mock_result)
+                return None
+            mock_calc.side_effect = side_effect
+            with patch.object(inst, 'from_instance') as mock_from_instance:
+                result = inst.resolve(in_place=True)
+                mock_from_instance.assert_called_once_with(mock_result)
+                # in_place: ret = None, returns None
+                assert result is None
+
+    def test_resolve_not_in_place_with_valid_result(self):
+        """handle_result with valid result, in_place=False, returns the result (branch 103->106)."""
+        inst = DummyInstrument(42.0)
+        mock_result = MagicMock()
+
+        with patch.object(Instrument, 'calc') as mock_calc:
+            def side_effect(risk_measure, fn=None):
+                if fn is not None:
+                    return fn(mock_result)
+                return None
+            mock_calc.side_effect = side_effect
+            result = inst.resolve(in_place=False)
+            # in_place=False, result is valid (not ErrorValue, not None): ret = result
+            assert result is mock_result
+
+    def test_resolve_in_place_multi_scenario_raises(self):
+        """resolve(in_place=True) under MultiScenario raises RuntimeError."""
+        from gs_quant.common import MultiScenario
+        inst = DummyInstrument(42.0)
+
+        mock_multi_scenario = MagicMock(spec=MultiScenario)
+        with patch('gs_quant.instrument.core.Scenario') as mock_scenario, \
+             patch('gs_quant.instrument.core.isinstance', side_effect=lambda obj, cls: builtins_isinstance(obj, cls)):
+            mock_scenario.path = [mock_multi_scenario]
+            with pytest.raises(RuntimeError, match='Cannot resolve in place under a MultiScenario Context'):
+                inst.resolve(in_place=True)
+
+
+# ---------------------------------------------------------------------------
+# Instrument.from_quick_entry
+# ---------------------------------------------------------------------------
+
+class TestInstrumentFromQuickEntry:
+    @patch('gs_quant.instrument.core.GsParserApi')
+    def test_from_quick_entry_no_asset_class_with_results(self, mock_parser_api):
+        """from_quick_entry without asset_class calls get_instrument_from_text."""
+        mock_parser_api.get_instrument_from_text.return_value = [
+            {'assetClass': 'Rates', 'type': 'Swap'}
+        ]
+        result = Instrument.from_quick_entry('10y usd swap')
+        mock_parser_api.get_instrument_from_text.assert_called_once_with('10y usd swap')
+
+    @patch('gs_quant.instrument.core.GsParserApi')
+    def test_from_quick_entry_no_asset_class_empty_result_raises(self, mock_parser_api):
+        """from_quick_entry with no results raises ValueError."""
+        mock_parser_api.get_instrument_from_text.return_value = []
+        with pytest.raises(ValueError, match='Could not resolve instrument'):
+            Instrument.from_quick_entry('gibberish')
+
+    @patch('gs_quant.instrument.core.GsParserApi')
+    def test_from_quick_entry_with_asset_class(self, mock_parser_api):
+        """from_quick_entry with asset_class calls get_instrument_from_text_asset_class."""
+        mock_parser_api.get_instrument_from_text_asset_class.return_value = {
+            'assetClass': 'Rates', 'type': 'Swap'
+        }
+        result = Instrument.from_quick_entry('10y swap', asset_class=AssetClass.Rates)
+        mock_parser_api.get_instrument_from_text_asset_class.assert_called_once_with(
+            '10y swap', 'Rates'
+        )
+
+    @patch('gs_quant.instrument.core.GsParserApi')
+    def test_from_quick_entry_invalid_instrument_raises(self, mock_parser_api):
+        """from_quick_entry raises ValueError on invalid instrument spec."""
+        mock_parser_api.get_instrument_from_text_asset_class.return_value = 'not_a_dict'
+        with pytest.raises(ValueError, match='Invalid instrument specification'):
+            Instrument.from_quick_entry('bad spec', asset_class=AssetClass.Rates)
+
+    @patch('gs_quant.instrument.core.GsParserApi')
+    def test_from_quick_entry_on_subclass_with_asset_class(self, mock_parser_api):
+        """Calling from_quick_entry on a subclass that has asset_class uses its asset_class."""
+        from gs_quant.target.instrument import IRSwap
+        mock_parser_api.get_instrument_from_text_asset_class.return_value = {
+            'notional_currency': 'USD'
+        }
+        # IRSwap.default_instance().asset_class is 'Rates'
+        result = IRSwap.from_quick_entry('10y swap')
+        mock_parser_api.get_instrument_from_text_asset_class.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Instrument.from_asset_ids / from_asset_id
+# ---------------------------------------------------------------------------
+
+class TestInstrumentFromAssetIds:
+    @patch('gs_quant.instrument.core.GsAssetApi', create=True)
+    def test_from_asset_ids_base_class(self, mock_gsassets_module):
+        """from_asset_ids on base Instrument returns instruments without type checking."""
+        from gs_quant.api.gs.assets import GsAssetApi
+        mock_inst1 = MagicMock()
+        mock_inst2 = MagicMock()
+        with patch.object(GsAssetApi, 'get_instruments_for_asset_ids', return_value=(mock_inst1, mock_inst2)):
+            result = Instrument.from_asset_ids(('id1', 'id2'))
+            assert result == (mock_inst1, mock_inst2)
+
+    def test_from_asset_id_single(self):
+        """from_asset_id delegates to from_asset_ids and returns first element."""
+        mock_inst = MagicMock()
+        with patch.object(Instrument, 'from_asset_ids', return_value=(mock_inst,)):
+            result = Instrument.from_asset_id('id1')
+            assert result is mock_inst
+
+    @patch('gs_quant.instrument.core.GsAssetApi', create=True)
+    def test_from_asset_ids_on_subclass_mismatch_raises(self, mock_gsassets_module):
+        """from_asset_ids on a subclass raises if returned instruments don't match type."""
+        from gs_quant.api.gs.assets import GsAssetApi
+        from gs_quant.target.instrument import IRSwap
+
+        mock_inst = MagicMock()
+        mock_inst.asset_class = AssetClass.Equity  # Mismatch with IRSwap
+        mock_inst.type = AssetType.Option
+
+        with patch.object(GsAssetApi, 'get_instruments_for_asset_ids', return_value=(mock_inst,)):
+            with pytest.raises(ValueError, match='not all of type'):
+                IRSwap.from_asset_ids(('id1',))
+
+    @patch('gs_quant.instrument.core.GsAssetApi', create=True)
+    def test_from_asset_ids_on_subclass_all_match(self, mock_gsassets_module):
+        """from_asset_ids on a subclass succeeds when all instruments match type (branch 283->288)."""
+        from gs_quant.api.gs.assets import GsAssetApi
+        from gs_quant.target.instrument import IRSwap
+
+        mock_inst = MagicMock()
+        mock_inst.asset_class = AssetClass.Rates
+        mock_inst.type = AssetType.Swap
+
+        with patch.object(GsAssetApi, 'get_instruments_for_asset_ids', return_value=(mock_inst,)):
+            result = IRSwap.from_asset_ids(('id1',))
+            assert result == (mock_inst,)

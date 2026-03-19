@@ -1637,6 +1637,84 @@ class TestMultiplePnlExplainAttributes:
         assert result['gamma_pnl'][d2] == pytest.approx(0.001)
 
 
+class TestWeightedScalingPortfolio:
+    def test_init(self):
+        from gs_quant.backtests.backtest_objects import WeightedScalingPortfolio
+        trades = MagicMock(spec=Portfolio)
+        dates = [dt.date(2021, 1, 1), dt.date(2021, 1, 2)]
+        risk = _make_risk_measure('PV')
+        total_size = 1_000_000.0
+        wsp = WeightedScalingPortfolio(trades=trades, dates=dates, risk=risk, total_size=total_size, csa_term='OIS')
+        assert wsp.trades is trades
+        assert wsp.dates == dates
+        assert wsp.risk is risk
+        assert wsp.total_size == total_size
+        assert wsp.csa_term == 'OIS'
+        assert wsp.results is None
+
+    def test_init_defaults(self):
+        from gs_quant.backtests.backtest_objects import WeightedScalingPortfolio
+        trades = MagicMock(spec=Portfolio)
+        risk = _make_risk_measure()
+        wsp = WeightedScalingPortfolio(trades=trades, dates=[], risk=risk, total_size=100.0)
+        assert wsp.csa_term is None
+        assert wsp.results is None
+
+
+class TestWeightedTrade:
+    def test_init(self):
+        from gs_quant.backtests.backtest_objects import WeightedTrade, WeightedScalingPortfolio
+        sp = MagicMock(spec=WeightedScalingPortfolio)
+        entry_payments = [MagicMock(), MagicMock()]
+        exit_payments = [MagicMock()]
+        wt = WeightedTrade(scaling_portfolio=sp, entry_payments=entry_payments, exit_payments=exit_payments)
+        assert wt.scaling_portfolio is sp
+        assert wt.entry_payments == entry_payments
+        assert wt.exit_payments == exit_payments
+
+
+class TestBackTestWeightedTradesProperty:
+    def test_weighted_trades_getter_setter(self):
+        bt = _make_backtest()
+        new_wt = defaultdict(list)
+        new_wt[dt.date(2021, 1, 1)] = ['trade1']
+        bt.weighted_trades = new_wt
+        assert bt.weighted_trades is new_wt
+        assert bt.weighted_trades[dt.date(2021, 1, 1)] == ['trade1']
+
+
+class TestStrategyAsTimeSeries:
+    def test_strategy_as_time_series(self):
+        bt = _make_backtest()
+        d1 = dt.date(2021, 1, 1)
+
+        # Create cash payments
+        trade = MagicMock()
+        trade.name = 'trade1'
+        cp = CashPayment(trade=trade, effective_date=d1, direction=1)
+        cp.cash_paid['USD'] = -100.0
+        bt._cash_payments[d1] = [cp]
+
+        # Create mock risk results that support to_frame and portfolio.to_frame
+        mock_results = MagicMock()
+        risk_df = pd.DataFrame({
+            'instrument_name': ['trade1'],
+            'risk_measure': ['PV'],
+            'value': [100.0],
+        })
+        mock_results.to_frame.return_value = risk_df
+        mock_results.__len__ = MagicMock(return_value=1)
+
+        portfolio_df = pd.DataFrame({'name': ['trade1'], 'type': ['IRSwap']})
+        mock_results.portfolio = MagicMock()
+        mock_results.portfolio.to_frame.return_value = portfolio_df
+
+        bt._results[d1] = mock_results
+
+        result = bt.strategy_as_time_series()
+        assert not result.empty
+
+
 class TestPnlExplainCumulative:
     def test_cumulative_across_three_dates(self):
         rm_delta = _make_risk_measure('Delta')

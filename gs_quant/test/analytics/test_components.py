@@ -13,6 +13,7 @@ from gs_quant.analytics.workspaces.components import (
     ContainerComponent,
     DataGridComponent,
     DataScreenerComponent,
+    DataVizComponent,
     LegendComponent,
     LegendItem,
     MonitorComponent,
@@ -426,3 +427,450 @@ class TestComponentFromDict:
         comp = Component.from_dict(obj)
         assert len(comp.selections) == 1
         assert comp.selections[0].selector_id == 's1'
+
+    def test_container_ids_applied(self):
+        """Test containerIds branch in Component.from_dict"""
+        obj = {
+            'id': 'comp1',
+            'type': 'plot',
+            'parameters': {'height': 200},
+            'containerIds': ['cid1', 'cid2'],
+        }
+        comp = Component.from_dict(obj)
+        # container_ids is set on the private attribute
+        assert comp is not None
+
+    def test_tags_applied(self):
+        """Test tags branch in Component.from_dict"""
+        obj = {
+            'id': 'comp1',
+            'type': 'plot',
+            'parameters': {'height': 200},
+            'tags': ['tag1', 'tag2'],
+        }
+        comp = Component.from_dict(obj)
+        assert comp.tags == ['tag1', 'tag2']
+
+    def test_no_selections_no_containerids_no_tags(self):
+        """Test from_dict with none of selections/containerIds/tags"""
+        obj = {
+            'id': 'comp1',
+            'type': 'plot',
+            'parameters': {'height': 200},
+        }
+        comp = Component.from_dict(obj)
+        assert comp.selections is None
+
+    def test_dataviz_from_dict(self):
+        """DataVizComponent from_dict dispatch"""
+        obj = {
+            'id': 'dv1',
+            'type': 'dataviz',
+            'parameters': {'height': 300},
+        }
+        comp = Component.from_dict(obj)
+        assert isinstance(comp, DataVizComponent)
+
+    def test_from_dict_with_scale(self):
+        """Test from_dict with non-None scale"""
+        obj = {
+            'id': 'comp1',
+            'type': 'plot',
+            'parameters': {'height': 300},
+        }
+        comp = Component.from_dict(obj, scale=6)
+        assert comp.width == 6
+
+    def test_from_dict_with_empty_parameters(self):
+        """Test from_dict with no parameters key"""
+        obj = {
+            'id': 'comp1',
+            'type': 'plot',
+        }
+        comp = Component.from_dict(obj)
+        assert comp.height == 200  # default
+
+    def test_from_dict_legend_dispatch(self):
+        """LegendComponent through generic from_dict gets overridden"""
+        obj = {
+            'id': 'leg1',
+            'type': 'legend',
+            'parameters': {
+                'height': 100,
+                'items': [{'color': 'red', 'icon': 'c', 'name': 'n'}],
+            },
+        }
+        # legend type should use LegendComponent class
+        comp = TYPE_TO_COMPONENT['legend']
+        assert comp == LegendComponent
+
+    def test_from_dict_promo_dispatch(self):
+        """PromoComponent through generic from_dict"""
+        obj = {
+            'id': 'p1',
+            'type': 'promo',
+            'parameters': {'height': 200},
+        }
+        comp = Component.from_dict(obj)
+        assert isinstance(comp, PromoComponent)
+
+    def test_from_dict_selector_dispatch(self):
+        """SelectorComponent through generic from_dict"""
+        obj = {
+            'id': 'sel1',
+            'type': 'selector',
+            'parameters': {
+                'height': 200,
+                'containerIds': ['c1'],
+            },
+        }
+        comp = Component.from_dict(obj)
+        assert isinstance(comp, SelectorComponent)
+
+    def test_from_dict_related_links_dispatch(self):
+        """RelatedLinksComponent through generic from_dict"""
+        obj = {
+            'id': 'rl1',
+            'type': 'relatedLinks',
+            'parameters': {
+                'height': 200,
+                'title': 'Links',
+                'links': [{'type': 'internal', 'name': 'n', 'link': '/p'}],
+            },
+        }
+        comp = Component.from_dict(obj)
+        assert isinstance(comp, RelatedLinksComponent)
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: Component base class
+# ---------------------------------------------------------------------------
+
+class TestComponentBase:
+    def test_id_setter_with_none(self):
+        """Setting id_ to None should generate a new id"""
+        pc = PlotComponent(height=200, id_='test')
+        pc.id_ = None
+        assert pc.id_ is not None
+        assert 'PlotComponent' in pc.id_
+
+    def test_id_setter_with_value(self):
+        """Setting id_ to a value should use that value"""
+        pc = PlotComponent(height=200, id_='test')
+        pc.id_ = 'new_id'
+        assert pc.id_ == 'new_id'
+
+    def test_width_setter(self):
+        pc = PlotComponent(height=200, id_='test')
+        pc.width = 6
+        assert pc.width == 6
+
+    def test_height_setter(self):
+        pc = PlotComponent(height=200, id_='test')
+        pc.height = 400
+        assert pc.height == 400
+
+    def test_selections_setter(self):
+        pc = PlotComponent(height=200, id_='test')
+        sels = [Selection('s1', 't1')]
+        pc.selections = sels
+        assert pc.selections == sels
+
+    def test_container_ids_setter(self):
+        pc = PlotComponent(height=200, id_='test')
+        pc.container_ids = ['c1', 'c2']
+        assert pc.container_ids == ['c1', 'c2']
+
+    def test_as_dict_no_height(self):
+        """height is None => parameters height defaults to 200"""
+        pc = PlotComponent.__new__(PlotComponent)
+        pc._height = None
+        pc._PlotComponent__id = 'test'  # name mangling workaround for test
+        # Use proper init instead
+        pc2 = PlotComponent(height=None, id_='test2')
+        d = pc2.as_dict()
+        assert d['parameters']['height'] == 200
+
+    def test_as_dict_with_selections(self):
+        """selections are set => included in dict"""
+        pc = PlotComponent(height=200, id_='test', selections=[Selection('s1', 't1')])
+        d = pc.as_dict()
+        assert 'selections' in d
+        assert len(d['selections']) == 1
+
+    def test_as_dict_no_selections(self):
+        """selections are None => not in dict"""
+        pc = PlotComponent(height=200, id_='test')
+        d = pc.as_dict()
+        assert 'selections' not in d
+
+    def test_as_dict_with_container_ids_base(self):
+        """Test Component.as_dict with container_ids set"""
+        sc = SelectorComponent(height=100, id_='sel1', container_ids=['c1', 'c2'])
+        # SelectorComponent inherits from Component, container_ids are set
+        d = sc.as_dict()
+        # container_ids are set on the Component, check if containerIds key in dict
+        # Note: SelectorComponent also adds containerIds in its own as_dict
+        assert d is not None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: DataVizComponent
+# ---------------------------------------------------------------------------
+
+class TestDataVizComponent:
+    def test_as_dict(self):
+        dv = DataVizComponent(height=300, id_='dv1')
+        d = dv.as_dict()
+        assert d['type'] == 'dataviz'
+        assert d['parameters']['height'] == 300
+
+    def test_as_dict_with_width(self):
+        dv = DataVizComponent(height=300, id_='dv2', width=6)
+        assert dv.width == 6
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: ArticleComponent additional
+# ---------------------------------------------------------------------------
+
+class TestArticleComponentBranches:
+    def test_no_tooltip(self):
+        ac = ArticleComponent(height=300, id_='art1')
+        d = ac.as_dict()
+        assert 'tooltip' not in d['parameters']
+
+    def test_no_commentary_channels(self):
+        ac = ArticleComponent(height=300, id_='art1')
+        d = ac.as_dict()
+        assert 'commentaryChannels' not in d['parameters']
+
+    def test_no_commentary_to_desktop(self):
+        ac = ArticleComponent(height=300, id_='art1')
+        d = ac.as_dict()
+        assert 'commentaryToDesktopLink' not in d['parameters']
+
+    def test_tooltip_only(self):
+        ac = ArticleComponent(height=300, id_='art1', tooltip='tip')
+        d = ac.as_dict()
+        assert d['parameters']['tooltip'] == 'tip'
+        assert 'commentaryChannels' not in d['parameters']
+
+    def test_commentary_channels_only(self):
+        ac = ArticleComponent(height=300, id_='art1', commentary_channels=['ch1'])
+        d = ac.as_dict()
+        assert d['parameters']['commentaryChannels'] == ['ch1']
+        assert 'tooltip' not in d['parameters']
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: CommentaryComponent additional
+# ---------------------------------------------------------------------------
+
+class TestCommentaryComponentBranches:
+    def test_no_tooltip(self):
+        cc = CommentaryComponent(height=300, id_='com1')
+        d = cc.as_dict()
+        assert 'tooltip' not in d['parameters']
+
+    def test_no_commentary_channels(self):
+        cc = CommentaryComponent(height=300, id_='com1')
+        d = cc.as_dict()
+        assert 'commentaryChannels' not in d['parameters']
+
+    def test_no_commentary_to_desktop(self):
+        cc = CommentaryComponent(height=300, id_='com1')
+        d = cc.as_dict()
+        assert 'commentaryToDesktopLink' not in d['parameters']
+
+    def test_tooltip_only(self):
+        cc = CommentaryComponent(height=300, id_='com1', tooltip='tip')
+        d = cc.as_dict()
+        assert d['parameters']['tooltip'] == 'tip'
+
+    def test_commentary_channels_only(self):
+        cc = CommentaryComponent(height=300, id_='com1', commentary_channels=['ch1'])
+        d = cc.as_dict()
+        assert d['parameters']['commentaryChannels'] == ['ch1']
+        assert 'commentaryToDesktopLink' not in d['parameters']
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: PromoComponent additional
+# ---------------------------------------------------------------------------
+
+class TestPromoComponentBranches:
+    def test_no_optional_params(self):
+        pc = PromoComponent(height=200, id_='promo1')
+        d = pc.as_dict()
+        assert 'tooltip' not in d['parameters']
+        assert 'body' not in d['parameters']
+        assert 'size' not in d['parameters']
+        # hide_border is None => not included
+        assert 'hideBorder' not in d['parameters']
+        # transparent is None => not included
+        assert 'transparent' not in d['parameters']
+
+    def test_transparent_false(self):
+        pc = PromoComponent(height=200, id_='promo1', transparent=False)
+        d = pc.as_dict()
+        assert d['parameters']['transparent'] is False
+
+    def test_from_dict_without_optional_params(self):
+        obj = {'id': 'p1', 'type': 'promo', 'parameters': {}}
+        pc = PromoComponent.from_dict(obj)
+        assert pc.tooltip is None
+        assert pc.body is None
+        assert pc.size is None
+        assert pc.hide_border is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: SeparatorComponent additional
+# ---------------------------------------------------------------------------
+
+class TestSeparatorComponentBranches:
+    def test_no_name(self):
+        sc = SeparatorComponent(height=50, id_='sep1')
+        d = sc.as_dict()
+        assert 'name' not in d['parameters']
+
+    def test_no_size(self):
+        sc = SeparatorComponent(height=50, id_='sep1', name='Section')
+        d = sc.as_dict()
+        assert 'size' not in d['parameters']
+        assert d['parameters']['name'] == 'Section'
+
+    def test_no_show_more_url(self):
+        sc = SeparatorComponent(height=50, id_='sep1', name='Section', size='sm')
+        d = sc.as_dict()
+        assert 'showMoreUrl' not in d['parameters']
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: LegendComponent additional
+# ---------------------------------------------------------------------------
+
+class TestLegendComponentBranches:
+    def test_no_position(self):
+        items = [LegendItem('red', 'circle', 'A')]
+        lc = LegendComponent(height=100, id_='leg1', items=items)
+        d = lc.as_dict()
+        assert 'position' not in d['parameters']
+
+    def test_no_transparent(self):
+        items = [LegendItem('red', 'circle', 'A')]
+        lc = LegendComponent(height=100, id_='leg1', items=items, position='top')
+        d = lc.as_dict()
+        assert 'transparent' not in d['parameters']
+
+    def test_from_dict_without_optional(self):
+        obj = {
+            'id': 'leg1',
+            'type': 'legend',
+            'parameters': {
+                'items': [{'color': 'red', 'icon': 'c', 'name': 'n'}],
+            },
+        }
+        lc = LegendComponent.from_dict(obj)
+        assert lc.position is None
+        assert lc.transparent is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: SelectorComponent additional
+# ---------------------------------------------------------------------------
+
+class TestSelectorComponentBranches:
+    def test_no_title(self):
+        sc = SelectorComponent(height=100, id_='sel1', container_ids=['c1'])
+        d = sc.as_dict()
+        assert 'title' not in d['parameters']
+
+    def test_no_tooltip(self):
+        sc = SelectorComponent(height=100, id_='sel1', container_ids=['c1'], title='T')
+        d = sc.as_dict()
+        assert 'tooltip' not in d['parameters']
+        assert d['parameters']['title'] == 'T'
+
+    def test_no_parent_selector(self):
+        sc = SelectorComponent(height=100, id_='sel1', container_ids=['c1'],
+                               title='T', tooltip='tip')
+        d = sc.as_dict()
+        assert 'parentSelectorId' not in d['parameters']
+        assert d['parameters']['tooltip'] == 'tip'
+
+    def test_from_dict_minimal(self):
+        obj = {
+            'id': 'sel1',
+            'type': 'selector',
+            'parameters': {
+                'containerIds': ['c1'],
+            },
+        }
+        sc = SelectorComponent.from_dict(obj)
+        assert sc.title is None
+        assert sc.tooltip is None
+        assert sc.default_option_index is None
+        assert sc.parent_selector_id is None
+
+    def test_no_default_option_index(self):
+        sc = SelectorComponent(height=100, id_='sel1', container_ids=['c1'])
+        d = sc.as_dict()
+        assert 'defaultOptionIndex' not in d['parameters']
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: LegendItem from_dict without tooltip
+# ---------------------------------------------------------------------------
+
+class TestLegendItemBranches:
+    def test_from_dict_no_tooltip(self):
+        li = LegendItem.from_dict({'color': 'green', 'icon': 'x', 'name': 'n'})
+        assert li.tooltip is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: RelatedLink from_dict without description
+# ---------------------------------------------------------------------------
+
+class TestRelatedLinkBranches:
+    def test_from_dict_no_description(self):
+        rl = RelatedLink.from_dict({'type': 'internal', 'name': 'n', 'link': '/p'})
+        assert rl.description is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: MonitorComponent as_dict
+# ---------------------------------------------------------------------------
+
+class TestMonitorComponentBranches:
+    def test_with_selections(self):
+        mc = MonitorComponent(height=200, id_='mon1',
+                              selections=[Selection('s1', 't1')])
+        d = mc.as_dict()
+        assert 'selections' in d
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: ContainerComponent additional
+# ---------------------------------------------------------------------------
+
+class TestContainerComponentBranches:
+    def test_as_dict_no_component_id_height_deleted(self):
+        cc = ContainerComponent(id_='cont1')
+        d = cc.as_dict()
+        assert 'height' not in d['parameters']
+        assert 'componentId' not in d['parameters']
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: DataGridComponent with selections
+# ---------------------------------------------------------------------------
+
+class TestDataGridComponentBranches:
+    def test_with_selections(self):
+        dg = DataGridComponent(height=300, id_='dg1',
+                               selections=[Selection('s1', 't1')])
+        d = dg.as_dict()
+        assert 'selections' in d

@@ -362,3 +362,334 @@ class TestFXImpliedCorrProcessor:
         result = proc.process(cross1)
         assert result.success is False
         assert 'test error' in result.data
+
+    def test_cross1_not_cross_cross2_is_cross(self):
+        """cross1 is not Cross but cross2 is Cross => else branch"""
+        proc = FXImpliedCorrProcessor(cross2=self._make_cross_mock(), tenor='3m')
+        result = proc.process(MagicMock())  # not a Cross
+        assert result.success is False
+        assert 'valid crosses' in result.data
+
+    def test_cross1_is_cross_cross2_not_cross(self):
+        """cross1 is Cross but cross2 is not Cross => else branch"""
+        proc = FXImpliedCorrProcessor(cross2=MagicMock(), tenor='3m')  # cross2 not Cross spec
+        cross1 = self._make_cross_mock()
+        result = proc.process(cross1)
+        assert result.success is False
+        assert 'valid crosses' in result.data
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: VolatilityProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestVolatilityProcessorBranches:
+    def test_get_plot_expression(self):
+        proc = VolatilityProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+    def test_init_with_custom_params(self):
+        proc = VolatilityProcessor(a=MagicMock(), w=22, returns_type=Returns.LOGARITHMIC,
+                                   start='2020-01-01', end='2020-12-31')
+        assert proc.w == 22
+        assert proc.returns_type == Returns.LOGARITHMIC
+        assert proc.start == '2020-01-01'
+        assert proc.end == '2020-12-31'
+
+    def test_a_data_is_none(self):
+        """children_data.get('a') returns None when key not present"""
+        proc = VolatilityProcessor(a=MagicMock())
+        # children_data is empty, get('a') => None which is not ProcessorResult
+        result = proc.process()
+        assert result.success is False
+        assert 'data' in result.data
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: SharpeRatioProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestSharpeRatioProcessorBranches:
+    def _make_proc(self, curve_type=None):
+        from gs_quant.common import Currency
+        from gs_quant.timeseries.helper import CurveType
+        proc = SharpeRatioProcessor.__new__(SharpeRatioProcessor)
+        proc.children = {}
+        proc.children_data = {}
+        proc.children['a'] = MagicMock()
+        proc.children['excess_returns'] = MagicMock()
+        proc.value = ProcessorResult(False, 'Value not set')
+        proc.id = 'test'
+        proc.parent = None
+        proc.parent_attr = None
+        proc.data_cell = None
+        proc.last_value = False
+        proc.measure_processor = False
+        proc.currency = Currency.USD
+        proc.w = None
+        proc.curve_type = curve_type or CurveType.PRICES
+        proc.start = None
+        proc.end = None
+        return proc
+
+    def test_a_is_not_processor_result(self):
+        """a_data is not ProcessorResult at all"""
+        proc = self._make_proc()
+        proc.children_data['a'] = 'raw string'
+        proc.children_data['excess_returns'] = ProcessorResult(True, _make_prices())
+        result = proc.process()
+        assert result.success is False
+
+    def test_excess_returns_not_processor_result(self):
+        """excess_returns_data is not ProcessorResult"""
+        proc = self._make_proc()
+        proc.children_data['a'] = ProcessorResult(True, _make_prices())
+        proc.children_data['excess_returns'] = 'raw string'
+        result = proc.process()
+        # isinstance check fails for excess_returns_data, so value not updated
+        assert result.success is False
+
+    def test_a_success_false(self):
+        """a_data.success is False"""
+        proc = self._make_proc()
+        proc.children_data['a'] = ProcessorResult(False, 'a failed')
+        proc.children_data['excess_returns'] = ProcessorResult(True, _make_prices())
+        result = proc.process()
+        assert result.success is False
+
+    def test_excess_returns_success_false(self):
+        """excess_returns_data.success is False"""
+        proc = self._make_proc()
+        proc.children_data['a'] = ProcessorResult(True, _make_prices())
+        proc.children_data['excess_returns'] = ProcessorResult(False, 'failed')
+        result = proc.process()
+        assert result.success is False
+
+    def test_both_success_false(self):
+        """Both a_data and excess_returns_data have success=False"""
+        proc = self._make_proc()
+        proc.children_data['a'] = ProcessorResult(False, 'a fail')
+        proc.children_data['excess_returns'] = ProcessorResult(False, 'er fail')
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = self._make_proc()
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: CorrelationProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestCorrelationProcessorBranches:
+    def _make_proc(self):
+        proc = CorrelationProcessor.__new__(CorrelationProcessor)
+        proc.children = {}
+        proc.children_data = {}
+        proc.value = ProcessorResult(False, 'Value not set')
+        proc.id = 'test'
+        proc.parent = None
+        proc.parent_attr = None
+        proc.data_cell = None
+        proc.last_value = False
+        proc.measure_processor = False
+        proc.children['a'] = MagicMock()
+        proc.children['benchmark'] = MagicMock()
+        proc.w = Window(None, 0)
+        from gs_quant.timeseries import SeriesType
+        proc.type_ = SeriesType.PRICES
+        proc.start = None
+        proc.end = None
+        proc.benchmark = MagicMock()
+        return proc
+
+    def test_a_not_processor_result_benchmark_is(self):
+        """a_data is not ProcessorResult but benchmark_data is"""
+        proc = self._make_proc()
+        proc.children_data['a'] = 'raw'
+        proc.children_data['benchmark'] = ProcessorResult(True, _make_series())
+        result = proc.process()
+        assert result.success is False
+
+    def test_a_is_processor_result_benchmark_not(self):
+        """a_data is ProcessorResult but benchmark_data is not"""
+        proc = self._make_proc()
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        proc.children_data['benchmark'] = 'raw'
+        result = proc.process()
+        assert result.success is False
+
+    def test_no_data_at_all(self):
+        """Neither a nor benchmark data set"""
+        proc = self._make_proc()
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = self._make_proc()
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: ChangeProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestChangeProcessorBranches:
+    def test_no_data_at_all(self):
+        """children_data is empty"""
+        proc = ChangeProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = ChangeProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: ReturnsProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestReturnsProcessorBranches:
+    def test_no_data_at_all(self):
+        """children_data is empty"""
+        proc = ReturnsProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_observations_with_type(self):
+        """observations set with non-default type"""
+        proc = ReturnsProcessor(a=MagicMock(), observations=1, type_=Returns.LOGARITHMIC)
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        result = proc.process()
+        assert result.success is True
+
+    def test_get_plot_expression(self):
+        proc = ReturnsProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: BetaProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestBetaProcessorBranches:
+    def test_no_data_at_all(self):
+        """children_data is empty => a_data is None"""
+        proc = BetaProcessor(a=MagicMock(), b=MagicMock())
+        result = proc.process()
+        assert result.success is False
+        assert "'a' series yet" in result.data
+
+    def test_a_success_b_data_none(self):
+        """a succeeds but b_data is None (not set in children_data)"""
+        proc = BetaProcessor(a=MagicMock(), b=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        # b not in children_data => b_data is None => not isinstance(None, ProcessorResult)
+        # but children.get('b') is truthy, so it goes to the inner check
+        # isinstance(None, ProcessorResult) is False => else branch
+        result = proc.process()
+        assert result.success is True
+        assert 'not a valid series' in result.data
+
+    def test_get_plot_expression(self):
+        proc = BetaProcessor(a=MagicMock(), b=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: FXImpliedCorrProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestFXImpliedCorrProcessorBranches:
+    def _make_cross_mock(self):
+        from gs_quant.markets.securities import Cross
+        return MagicMock(spec=Cross)
+
+    def test_get_plot_expression(self):
+        proc = FXImpliedCorrProcessor(cross2=self._make_cross_mock(), tenor='3m')
+        assert proc.get_plot_expression() is None
+
+    def test_init_params(self):
+        """Test init stores all params correctly"""
+        cross2 = self._make_cross_mock()
+        proc = FXImpliedCorrProcessor(cross2=cross2, tenor='6m', start='2020-01-01', end='2020-12-31')
+        assert proc.cross2 is cross2
+        assert proc.tenor == '6m'
+        assert proc.start == '2020-01-01'
+        assert proc.end == '2020-12-31'
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: SharpeRatioProcessor __init__ and get_excess_returns_query
+# ---------------------------------------------------------------------------
+class TestSharpeRatioProcessorInit:
+    def test_init_creates_excess_returns_query(self):
+        """Exercise actual __init__ which calls get_excess_returns_query"""
+        from gs_quant.common import Currency
+        from gs_quant.timeseries.helper import CurveType
+
+        proc = SharpeRatioProcessor(
+            a=MagicMock(),
+            currency=Currency.USD,
+            w=None,
+            curve_type=CurveType.PRICES,
+            start=None,
+            end=None,
+        )
+        assert proc.currency == Currency.USD
+        assert proc.w is None
+        assert proc.curve_type == CurveType.PRICES
+        assert 'a' in proc.children
+        assert 'excess_returns' in proc.children
+        # excess_returns should be a DataQueryInfo
+        er = proc.children['excess_returns']
+        assert isinstance(er, DataQueryInfo)
+        assert er.attr == 'excess_returns'
+
+    def test_get_excess_returns_query(self):
+        """Test the query generation method directly"""
+        from gs_quant.common import Currency
+        from gs_quant.timeseries.helper import CurveType
+
+        proc = SharpeRatioProcessor(
+            a=MagicMock(),
+            currency=Currency.USD,
+        )
+        query_info = proc.get_excess_returns_query()
+        assert query_info.attr == 'excess_returns'
+        assert query_info.processor is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: CorrelationProcessor __init__ and get_benchmark_coordinate
+# ---------------------------------------------------------------------------
+class TestCorrelationProcessorInit:
+    def test_init_creates_benchmark_coordinate(self):
+        """Exercise actual __init__ which calls get_benchmark_coordinate"""
+        from gs_quant.timeseries import SeriesType
+
+        benchmark = MagicMock()
+        proc = CorrelationProcessor(
+            a=MagicMock(),
+            benchmark=benchmark,
+            start=None,
+            end=None,
+            w=Window(None, 0),
+            type_=SeriesType.PRICES,
+        )
+        assert proc.benchmark is benchmark
+        assert proc.w is not None
+        assert proc.type_ == SeriesType.PRICES
+        assert 'a' in proc.children
+        assert 'benchmark' in proc.children
+        bm = proc.children['benchmark']
+        assert isinstance(bm, DataQueryInfo)
+        assert bm.attr == 'benchmark'
+        assert bm.entity is benchmark
+
+    def test_get_benchmark_coordinate(self):
+        """Test the query generation method directly"""
+        benchmark = MagicMock()
+        proc = CorrelationProcessor(
+            a=MagicMock(),
+            benchmark=benchmark,
+        )
+        coord = proc.get_benchmark_coordinate()
+        assert coord.attr == 'benchmark'
+        assert coord.entity is benchmark
+        assert coord.processor is None

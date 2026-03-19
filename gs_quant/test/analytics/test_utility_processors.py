@@ -300,3 +300,266 @@ class TestNthLastProcessor:
         proc.children_data['a'] = 99
         result = proc.process()
         assert result.success is False
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: LastProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestLastProcessorBranches:
+    def test_no_data_at_all(self):
+        """children_data is empty => a_data is None => not isinstance => return default"""
+        proc = LastProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_a_success_false(self):
+        """a_data is ProcessorResult but success=False"""
+        proc = LastProcessor(a=MagicMock())
+        proc.children_data['a'] = ProcessorResult(False, 'fail')
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = LastProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: MinProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestMinProcessorBranches:
+    def test_no_data(self):
+        proc = MinProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = MinProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: MaxProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestMaxProcessorBranches:
+    def test_no_data(self):
+        proc = MaxProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = MaxProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: AppendProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestAppendProcessorBranches:
+    def test_a_failure_b_success(self):
+        proc = AppendProcessor(a=MagicMock(), b=MagicMock())
+        proc.children_data['a'] = ProcessorResult(False, 'a fail')
+        proc.children_data['b'] = ProcessorResult(True, _make_series())
+        result = proc.process()
+        assert result.success is False
+
+    def test_both_failure(self):
+        proc = AppendProcessor(a=MagicMock(), b=MagicMock())
+        proc.children_data['a'] = ProcessorResult(False, 'a fail')
+        proc.children_data['b'] = ProcessorResult(False, 'b fail')
+        result = proc.process()
+        assert result.success is False
+
+    def test_no_data(self):
+        proc = AppendProcessor(a=MagicMock(), b=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_a_processor_b_not(self):
+        """a_data is ProcessorResult but b_data is not"""
+        proc = AppendProcessor(a=MagicMock(), b=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        proc.children_data['b'] = 'not a PR'
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = AppendProcessor(a=MagicMock(), b=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: AdditionProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestAdditionProcessorBranches:
+    def test_no_data(self):
+        """children_data empty => a_data is None"""
+        proc = AdditionProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_b_not_processor_result(self):
+        """a succeeds, no addend, b_data is not ProcessorResult"""
+        proc = AdditionProcessor(a=MagicMock(), b=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        proc.children_data['b'] = 'raw string'
+        result = proc.process()
+        # b_data is not ProcessorResult => isinstance fails => value not updated
+        assert result.success is False
+
+    def test_b_not_in_children_data(self):
+        """a succeeds, no addend, b not in children_data"""
+        proc = AdditionProcessor(a=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        result = proc.process()
+        # b_data is None => isinstance(None, PR) is False => value not updated
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = AdditionProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: SubtractionProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestSubtractionProcessorBranches:
+    def test_no_data(self):
+        proc = SubtractionProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_b_not_processor_result(self):
+        """a succeeds, no subtrahend, b_data not ProcessorResult"""
+        proc = SubtractionProcessor(a=MagicMock(), b=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        proc.children_data['b'] = 42
+        result = proc.process()
+        assert result.success is False
+
+    def test_b_not_in_children_data(self):
+        proc = SubtractionProcessor(a=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = SubtractionProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: MultiplicationProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestMultiplicationProcessorBranches:
+    def test_no_data(self):
+        proc = MultiplicationProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_b_not_processor_result(self):
+        proc = MultiplicationProcessor(a=MagicMock(), b=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        proc.children_data['b'] = 'raw'
+        result = proc.process()
+        assert result.success is False
+
+    def test_b_not_in_children_data(self):
+        proc = MultiplicationProcessor(a=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = MultiplicationProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: DivisionProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestDivisionProcessorBranches:
+    def test_no_data(self):
+        proc = DivisionProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_b_not_processor_result(self):
+        proc = DivisionProcessor(a=MagicMock(), b=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        proc.children_data['b'] = 99.9
+        result = proc.process()
+        assert result.success is False
+
+    def test_b_not_in_children_data(self):
+        proc = DivisionProcessor(a=MagicMock())
+        proc.children_data['a'] = ProcessorResult(True, _make_series())
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = DivisionProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: OneDayProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestOneDayProcessorBranches:
+    def test_no_data_at_all(self):
+        """children_data empty"""
+        proc = OneDayProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_data_length_1(self):
+        """len(data) < 2 => falls to end"""
+        proc = OneDayProcessor(a=MagicMock())
+        idx = pd.to_datetime(['2020-01-01'])
+        series = pd.Series([1.0], index=idx)
+        proc.children_data['a'] = ProcessorResult(True, series)
+        result = proc.process()
+        assert result.success is False
+
+    def test_after_drop_exactly_2(self):
+        """After drop, exactly 2 values remain => success"""
+        proc = OneDayProcessor(a=MagicMock())
+        # 3 daily entries: drop last date => 2 remain => len(value) >= 2 => success
+        idx = pd.to_datetime(['2020-01-01', '2020-01-02', '2020-01-03'])
+        series = pd.Series([1.0, 2.0, 3.0], index=idx)
+        proc.children_data['a'] = ProcessorResult(True, series)
+        result = proc.process()
+        assert result.success is True
+        assert len(result.data) == 2
+
+    def test_intraday_data(self):
+        """Intraday timestamps where drop(date()) removes multiple entries on last date"""
+        proc = OneDayProcessor(a=MagicMock())
+        idx = pd.to_datetime([
+            '2020-01-01 09:00', '2020-01-01 10:00',
+            '2020-01-02 09:00', '2020-01-02 10:00',
+            '2020-01-03 09:00', '2020-01-03 10:00',
+        ])
+        series = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], index=idx)
+        proc.children_data['a'] = ProcessorResult(True, series)
+        result = proc.process()
+        assert result.success is True
+        assert len(result.data) == 2
+
+    def test_get_plot_expression(self):
+        proc = OneDayProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
+
+
+# ---------------------------------------------------------------------------
+# Branch coverage: NthLastProcessor additional branches
+# ---------------------------------------------------------------------------
+class TestNthLastProcessorBranches:
+    def test_no_data(self):
+        proc = NthLastProcessor(a=MagicMock())
+        result = proc.process()
+        assert result.success is False
+
+    def test_get_plot_expression(self):
+        proc = NthLastProcessor(a=MagicMock())
+        assert proc.get_plot_expression() is None
