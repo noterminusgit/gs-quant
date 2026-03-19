@@ -32,6 +32,7 @@ from gs_quant.backtests.backtest_objects import (
     ConstantTransactionModel,
     DataCashAccrualModel,
     Hedge,
+    OisFixingCashAccrualModel,
     PnlAttribute,
     PnlDefinition,
     PredefinedAssetBacktest,
@@ -1751,3 +1752,228 @@ class TestPnlExplainCumulative:
         assert result['delta'][d2] == pytest.approx(50.0)
         # d3: 1.0 * 10 * (108-105) = 30; cum = 80
         assert result['delta'][d3] == pytest.approx(80.0)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 – additional branch-coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestCostAggregationFuncMinBranch:
+    """Cover branch [484,486]: cost_aggregation_func returns min."""
+
+    def test_cost_aggregation_func_min(self):
+        agg = AggregateTransactionModel(
+            transaction_models=[],
+            aggregate_type=TransactionAggType.MIN,
+        )
+        mock_inst = MagicMock()
+        entry = TransactionCostEntry(
+            date=dt.date(2024, 1, 1),
+            instrument=mock_inst,
+            transaction_model=agg,
+        )
+        assert entry.cost_aggregation_func is min
+
+    def test_cost_aggregation_func_no_aggregate(self):
+        """When not AggregateTransactionModel -> returns sum [484,486 false branch]."""
+        simple = ConstantTransactionModel(0)
+        mock_inst = MagicMock()
+        entry = TransactionCostEntry(
+            date=dt.date(2024, 1, 1),
+            instrument=mock_inst,
+            transaction_model=simple,
+        )
+        assert entry.cost_aggregation_func is sum
+
+
+class TestGetCostByComponentMinMax:
+    """Cover branches [562,565] and aggregation min/max paths in get_cost_by_component."""
+
+    def _make_entry_with_costs(self, agg_type, fixed_val, raw_scaled_val, scaling_level=1.0):
+        """Create a TransactionCostEntry that will compute specific fixed/scaled costs.
+
+        The ScaledTransactionModel cost formula is:
+            abs(raw_cost * scaling_level * additional_scaling)
+        So to get a desired scaled_cost, set raw_scaled_val appropriately.
+        """
+        const_model = ConstantTransactionModel(fixed_val)
+        scaled_model = ScaledTransactionModel(scaling_level=scaling_level)
+
+        agg = AggregateTransactionModel(
+            transaction_models=[const_model, scaled_model],
+            aggregate_type=agg_type,
+        )
+        mock_inst = MagicMock()
+        entry = TransactionCostEntry(
+            date=dt.date(2024, 1, 1),
+            instrument=mock_inst,
+            transaction_model=agg,
+        )
+
+        entry._unit_cost_by_model_by_inst = {
+            const_model: {mock_inst: fixed_val},
+            scaled_model: {mock_inst: raw_scaled_val},
+        }
+        entry._instrument = mock_inst
+        return entry
+
+    def test_max_agg_fixed_wins(self):
+        """max agg where fixed > scaled -> [560,561] branch.
+        fixed_val=10, raw_scaled=1 * scaling_level=1.0 * additional_scaling=1.0 = 1
+        max([10, 1]) == 10 == fixed_cost -> return (10, 0)
+        """
+        entry = self._make_entry_with_costs(TransactionAggType.MAX, 10, 1, scaling_level=1.0)
+        fixed, scaled = entry.get_cost_by_component()
+        assert fixed == 10
+        assert scaled == 0
+
+    def test_max_agg_scaled_wins(self):
+        """max agg where scaled > fixed -> [562,563] branch.
+        fixed_val=1, raw_scaled=10 * scaling_level=1.0 = 10
+        max([1, 10]) == 10 == scaled_cost -> return (0, 10)
+        """
+        entry = self._make_entry_with_costs(TransactionAggType.MAX, 1, 10, scaling_level=1.0)
+        fixed, scaled = entry.get_cost_by_component()
+        assert fixed == 0
+        assert scaled == 10
+
+    def test_min_agg_fixed_wins(self):
+        """min agg where fixed < scaled -> [560,561] branch.
+        fixed_val=1, raw_scaled=10 * scaling_level=1.0 = 10
+        min([1, 10]) == 1 == fixed_cost -> return (1, 0)
+        """
+        entry = self._make_entry_with_costs(TransactionAggType.MIN, 1, 10, scaling_level=1.0)
+        fixed, scaled = entry.get_cost_by_component()
+        assert fixed == 1
+        assert scaled == 0
+
+    def test_min_agg_scaled_wins(self):
+        """min agg where scaled < fixed -> [562,563] branch.
+        fixed_val=10, raw_scaled=1 * scaling_level=1.0 = 1
+        min([10, 1]) == 1 == scaled_cost -> return (0, 1)
+        """
+        entry = self._make_entry_with_costs(TransactionAggType.MIN, 10, 1, scaling_level=1.0)
+        fixed, scaled = entry.get_cost_by_component()
+        assert fixed == 0
+        assert scaled == 1
+
+    def test_min_agg_equal_costs_returns_fixed(self):
+        """min agg where fixed == scaled -> min returns equal to fixed_cost.
+        fixed_val=5, raw_scaled=5 * scaling_level=1.0 = 5
+        min([5, 5]) == 5 == fixed_cost -> return (5, 0)
+        Note: branch [562,565] (ValueError) is dead code since min/max always
+        returns one of the operands.
+        """
+        entry = self._make_entry_with_costs(TransactionAggType.MIN, 5, 5, scaling_level=1.0)
+        fixed, scaled = entry.get_cost_by_component()
+        assert fixed == 5
+        assert scaled == 0
+
+
+class TestOisFixingCashAccrualModel:
+    """Cover branches [821,-820], [821,822], [822,823], [822,845] for OisFixingCashAccrualModel."""
+
+    @patch('gs_quant.backtests.backtest_objects.PricingContext')
+    @patch('gs_quant.backtests.backtest_objects.IRSwap')
+    @patch('gs_quant.backtests.backtest_objects.DataCashAccrualModel')
+    def test_currency_not_in_cache_fetches_ois(self, mock_ds_model, mock_swap, mock_pc):
+        """When currency not in ois_fixings -> fetch it [821,822] + [822,823]."""
+        import gs_quant.backtests.backtest_objects as bo
+        original_fixings = bo.ois_fixings.copy()
+        try:
+            bo.ois_fixings.clear()
+
+            mock_result = MagicMock()
+            mock_df = pd.DataFrame({
+                'payment_type': ['Flt', 'Fix'],
+                'accrual_start_date': [dt.date(2024, 1, 1), dt.date(2024, 1, 2)],
+                'rate': [0.05, 0.04],
+            })
+            mock_result.result.return_value = mock_df
+
+            swap_instance = MagicMock()
+            swap_instance.calc.return_value = mock_result
+            mock_swap.return_value = swap_instance
+
+            mock_ds_instance = MagicMock()
+            mock_ds_instance.get_accrued_value.return_value = {'USD': 100.05}
+            mock_ds_model.return_value = mock_ds_instance
+
+            model = OisFixingCashAccrualModel(
+                start_date=dt.date(2023, 1, 1),
+                end_date=dt.date(2024, 1, 1),
+            )
+
+            current_value = [{'USD': 100.0}]
+            to_state = MagicMock()
+            result = model.get_accrued_value(current_value, to_state)
+            assert result == {'USD': 100.05}
+            mock_ds_model.assert_called_once()
+        finally:
+            bo.ois_fixings.clear()
+            bo.ois_fixings.update(original_fixings)
+
+    @patch('gs_quant.backtests.backtest_objects.DataCashAccrualModel')
+    def test_currency_already_in_cache(self, mock_ds_model):
+        """When currency already in ois_fixings -> skip fetch [822,845]."""
+        import gs_quant.backtests.backtest_objects as bo
+        original_fixings = bo.ois_fixings.copy()
+        try:
+            mock_source = MagicMock()
+            bo.ois_fixings['EUR'] = mock_source
+
+            mock_ds_instance = MagicMock()
+            mock_ds_instance.get_accrued_value.return_value = {'EUR': 200.0}
+            mock_ds_model.return_value = mock_ds_instance
+
+            model = OisFixingCashAccrualModel()
+            current_value = [{'EUR': 100.0}]
+            to_state = MagicMock()
+            result = model.get_accrued_value(current_value, to_state)
+            assert result == {'EUR': 200.0}
+            mock_ds_model.assert_called_once_with(mock_source, True)
+        finally:
+            bo.ois_fixings.clear()
+            bo.ois_fixings.update(original_fixings)
+
+    @patch('gs_quant.backtests.backtest_objects.PricingContext')
+    @patch('gs_quant.backtests.backtest_objects.IRSwap')
+    @patch('gs_quant.backtests.backtest_objects.RelativeDate')
+    @patch('gs_quant.backtests.backtest_objects.DataCashAccrualModel')
+    def test_string_start_date_uses_relative_date(self, mock_ds_model, mock_rd, mock_swap, mock_pc):
+        """When start_date is a string -> RelativeDate branch [823-826]."""
+        import gs_quant.backtests.backtest_objects as bo
+        original_fixings = bo.ois_fixings.copy()
+        try:
+            bo.ois_fixings.clear()
+
+            mock_rd.return_value.apply_rule.return_value = dt.date(2023, 6, 1)
+
+            mock_result = MagicMock()
+            mock_df = pd.DataFrame({
+                'payment_type': ['Flt'],
+                'accrual_start_date': [dt.date(2024, 1, 1)],
+                'rate': [0.05],
+            })
+            mock_result.result.return_value = mock_df
+
+            swap_instance = MagicMock()
+            swap_instance.calc.return_value = mock_result
+            mock_swap.return_value = swap_instance
+
+            mock_ds_instance = MagicMock()
+            mock_ds_instance.get_accrued_value.return_value = {'GBP': 50.0}
+            mock_ds_model.return_value = mock_ds_instance
+
+            model = OisFixingCashAccrualModel(
+                start_date='-1y',
+                end_date='-6m',
+            )
+            current_value = [{'GBP': 100.0}]
+            to_state = MagicMock()
+            result = model.get_accrued_value(current_value, to_state)
+            assert result == {'GBP': 50.0}
+        finally:
+            bo.ois_fixings.clear()
+            bo.ois_fixings.update(original_fixings)

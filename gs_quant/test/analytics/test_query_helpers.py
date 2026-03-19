@@ -271,3 +271,41 @@ class TestValidDimensions:
     def test_empty_dimensions(self):
         df = pd.DataFrame({'asset': [1]})
         assert valid_dimensions((), df) is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 – additional branch-coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateQueriesRangeAlreadyPopulated:
+    """Cover branch [62,73]: query_map['range'] is already populated (truthy),
+    so the startDate/endDate block is skipped."""
+
+    def test_range_already_populated_skips_date_setting(self):
+        """When a second query_info for the same dataset+range key arrives,
+        the range dict is already non-empty -> branch [62,73]."""
+        qi1 = _make_data_query_info()
+        qi1.__class__ = DataQueryInfo
+        qi2 = _make_data_query_info()
+        qi2.__class__ = DataQueryInfo
+        # Both have the same coordinate and range string, so they map to the same key
+        result = aggregate_queries([qi1, qi2])
+        # The range should only contain startDate/endDate set from the first query
+        key = list(result['DS1'].keys())[0]
+        assert result['DS1'][key]['range']['startDate'] == dt.date(2021, 1, 1)
+        assert result['DS1'][key]['range']['endDate'] == dt.date(2021, 6, 1)
+
+    def test_start_is_none_skips_date_branches(self):
+        """When query.start is None -> neither isinstance(dt.date) nor isinstance(dt.datetime)
+        matches, covering branches [63,65] false -> [65,68] path."""
+        query = _make_query(start=None, end=None)
+        qi = _make_data_query_info(query=query)
+        qi.__class__ = DataQueryInfo
+        result = aggregate_queries([qi])
+        key = list(result['DS1'].keys())[0]
+        # range should not have startDate or startTime
+        assert 'startDate' not in result['DS1'][key]['range']
+        assert 'startTime' not in result['DS1'][key]['range']
+        assert 'endDate' not in result['DS1'][key]['range']
+        assert 'endTime' not in result['DS1'][key]['range']

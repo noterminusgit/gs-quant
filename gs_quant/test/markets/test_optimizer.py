@@ -2526,3 +2526,107 @@ class TestEdgeCases:
         # constraintPrioritySettings is None from ConstraintPriorities.to_dict() when all are None
         # The code checks `if settings[key] is not None` so it should be excluded
         assert 'constraintPrioritySettings' not in d['parameters']
+
+
+# =============================================================================
+# Phase 6 – additional branch-coverage tests
+# =============================================================================
+
+
+class TestOptimizerStrategyBranchPhase6:
+    """Cover branches: [1677,1676], [1685,1684], [1693,1692],
+    [1756,-1741], [1810,-1794], [1920,1921], [1975,1976]"""
+
+    def _make_strategy(self, *, result=None, turnover=None, constraints=None, settings=None):
+        """Build an OptimizerStrategy with mocks pre-wired."""
+        mock_ps = MagicMock()
+        mock_ps.date = dt.date(2024, 1, 15)
+        mock_ps.reference_notional = None
+        mock_ps.to_frame.return_value = pd.DataFrame(
+            {'asset_id': ['id1'], 'quantity': [100]}
+        )
+        mock_universe = MagicMock()
+        mock_universe.to_dict.return_value = {}
+        mock_rm = MagicMock(id='model1')
+        s = OptimizerStrategy.__new__(OptimizerStrategy)
+        s._OptimizerStrategy__objective = OptimizerObjective.MINIMIZE_FACTOR_RISK
+        s._OptimizerStrategy__objective_parameters = None
+        s._OptimizerStrategy__initial_position_set = mock_ps
+        s._OptimizerStrategy__constraints = constraints or OptimizerConstraints()
+        s._OptimizerStrategy__settings = settings or OptimizerSettings()
+        s._OptimizerStrategy__universe = mock_universe
+        s._OptimizerStrategy__risk_model = mock_rm
+        s._OptimizerStrategy__turnover = turnover
+        s._OptimizerStrategy__result = result
+        return s
+
+    @patch('gs_quant.markets.optimizer.GsSession')
+    def test_to_dict_constraints_all_none_skipped(self, mock_gs):
+        """Empty constraints dict -> for loop body never entered [1677,1676]."""
+        mock_gs.current.sync.post.return_value = {'actualNotional': 10000000}
+        constraints = MagicMock()
+        constraints.to_dict.return_value = {}  # empty -> loop has no iterations
+        settings = MagicMock()
+        settings.to_dict.return_value = {}
+        s = self._make_strategy(constraints=constraints, settings=settings)
+        s._OptimizerStrategy__constraints = constraints
+        s._OptimizerStrategy__settings = settings
+        d = s.to_dict()
+        assert 'objective' in d
+
+    @patch('gs_quant.markets.optimizer.GsSession')
+    def test_to_dict_universe_all_none_skipped(self, mock_gs):
+        """Universe dict with a None value -> [1685,1684] skip branch."""
+        mock_gs.current.sync.post.return_value = {'actualNotional': 10000000}
+        s = self._make_strategy()
+        s._OptimizerStrategy__universe.to_dict.return_value = {'excludeKey': None}
+        d = s.to_dict()
+        assert 'excludeKey' not in d['parameters']
+
+    @patch('gs_quant.markets.optimizer.GsSession')
+    def test_to_dict_turnover_none_values_skipped(self, mock_gs):
+        """Turnover dict has a None value -> [1693,1692] skip branch."""
+        mock_gs.current.sync.post.return_value = {'actualNotional': 10000000}
+        mock_turnover = MagicMock()
+        mock_turnover.turnover_portfolio = MagicMock()
+        mock_turnover.turnover_portfolio.reference_notional = None
+        mock_turnover.to_dict.return_value = {'turnoverKey': None}
+        s = self._make_strategy(turnover=mock_turnover)
+        d = s.to_dict()
+        assert 'turnoverKey' not in d['parameters']
+
+    @patch('gs_quant.markets.optimizer.GsHedgeApi')
+    def test_run_non_axioma_type_noop(self, mock_hedge):
+        """run with non-AXIOMA type -> [1756,-1741] branch not entered."""
+        s = self._make_strategy()
+        s.to_dict = MagicMock()
+        # Pass a type that is not AXIOMA_PORTFOLIO_OPTIMIZER
+        # The if-check on line 1756 should be false -> method returns without doing anything
+        mock_type = MagicMock()
+        mock_type.__eq__ = lambda self, other: False  # not equal to AXIOMA
+        mock_type.__ne__ = lambda self, other: True
+        s.run(optimizer_type=mock_type)
+        mock_hedge.calculate_hedge.assert_not_called()
+
+    @patch('gs_quant.markets.optimizer.GsHedgeApi')
+    def test_run_save_share_non_axioma_type_noop(self, mock_hedge):
+        """run_save_share with non-AXIOMA type -> [1810,-1794] branch not entered."""
+        s = self._make_strategy()
+        s.to_dict = MagicMock()
+        mock_type = MagicMock()
+        mock_type.__eq__ = lambda self, other: False
+        mock_type.__ne__ = lambda self, other: True
+        result = s.run_save_share(optimizer_type=mock_type)
+        mock_hedge.calculate_hedge.assert_not_called()
+
+    def test_get_hedge_exposure_summary_no_result(self):
+        """[1920,1921] __result is None -> raises."""
+        s = self._make_strategy(result=None)
+        with pytest.raises(MqValueError, match='Please run the optimization'):
+            s.get_hedge_exposure_summary()
+
+    def test_get_hedge_constituents_by_direction_no_result(self):
+        """[1975,1976] __result is None -> raises."""
+        s = self._make_strategy(result=None)
+        with pytest.raises(MqValueError, match='Please run the optimization'):
+            s.get_hedge_constituents_by_direction()

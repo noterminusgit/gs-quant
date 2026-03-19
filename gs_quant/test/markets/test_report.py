@@ -1626,5 +1626,257 @@ class TestPnlMeasurePercent:
         assert isinstance(result, pd.DataFrame)
 
 
+# ────────────────────────────────────────────────────────────
+# Report.run() branch coverage
+# ────────────────────────────────────────────────────────────
+
+class TestReportRun:
+    """Cover all branches in Report.run() (lines 389-416)."""
+
+    def _make_report(self):
+        return Report(
+            report_id='R1',
+            position_source_id='MP1',
+            position_source_type=PositionSourceType.Portfolio,
+            report_type=ReportType.Portfolio_Performance_Analytics,
+        )
+
+    @patch.object(Report, 'get_most_recent_job')
+    @patch.object(Report, 'schedule')
+    def test_run_async_returns_job_future(self, mock_schedule, mock_get_job):
+        """Branches [391,392], [394,395]: is_async=True returns job_future immediately."""
+        mock_job = MagicMock()
+        mock_get_job.return_value = mock_job
+        report = self._make_report()
+        result = report.run(is_async=True)
+        assert result is mock_job
+        mock_schedule.assert_called_once()
+
+    @patch('gs_quant.markets.report.sleep')
+    @patch.object(Report, 'get_most_recent_job')
+    @patch.object(Report, 'schedule')
+    def test_run_sync_done_immediately(self, mock_schedule, mock_get_job, mock_sleep):
+        """Branches [394,396], [397,398], [398,399]: sync, done immediately."""
+        mock_job = MagicMock()
+        mock_job.done.return_value = True
+        mock_job.result.return_value = 'results'
+        mock_get_job.return_value = mock_job
+        report = self._make_report()
+        result = report.run(is_async=False)
+        assert result == 'results'
+        mock_sleep.assert_not_called()
+
+    @patch('gs_quant.markets.report.sleep')
+    @patch.object(Report, 'get_most_recent_job')
+    @patch.object(Report, 'schedule')
+    def test_run_sync_waits_then_done(self, mock_schedule, mock_get_job, mock_sleep):
+        """Branches [398,400]: sleep called, then done on second iteration."""
+        mock_job = MagicMock()
+        mock_job.done.side_effect = [False, True]
+        mock_job.result.return_value = 'delayed_results'
+        mock_get_job.return_value = mock_job
+        report = self._make_report()
+        result = report.run(is_async=False)
+        assert result == 'delayed_results'
+        mock_sleep.assert_called_with(6)
+
+    @patch.object(Report, 'get')
+    @patch.object(Report, 'get_most_recent_job')
+    @patch.object(Report, 'schedule')
+    def test_run_index_error_exhausts_counter_waiting(self, mock_schedule, mock_get_job, mock_get):
+        """Branches [391,407], [408,409]: IndexError 5 times, status=waiting."""
+        mock_get_job.side_effect = IndexError('no jobs')
+        mock_report = MagicMock()
+        mock_report.status = ReportStatus.waiting
+        mock_get.return_value = mock_report
+        report = self._make_report()
+        with pytest.raises(MqValueError, match='stuck in "waiting" status'):
+            report.run(is_async=True)
+
+    @patch.object(Report, 'get')
+    @patch.object(Report, 'get_most_recent_job')
+    @patch.object(Report, 'schedule')
+    def test_run_index_error_exhausts_counter_other_status(self, mock_schedule, mock_get_job, mock_get):
+        """Branches [391,407], [408,412]: IndexError 5 times, status != waiting."""
+        mock_get_job.side_effect = IndexError('no jobs')
+        mock_report = MagicMock()
+        mock_report.status = ReportStatus.done
+        mock_get.return_value = mock_report
+        report = self._make_report()
+        with pytest.raises(MqValueError, match='taking longer to run than expected'):
+            report.run(is_async=True)
+
+
+# ────────────────────────────────────────────────────────────
+# PerformanceReport.get_aum() Net branch
+# ────────────────────────────────────────────────────────────
+
+class TestPerformanceReportGetAumNet:
+    """Cover branch [801,-780]: aum_source == RiskAumSource.Net."""
+
+    @patch.object(PerformanceReport, 'get_net_exposure')
+    @patch.object(PerformanceReport, 'get_aum_source')
+    def test_get_aum_net(self, mock_aum_source, mock_net_exposure):
+        mock_aum_source.return_value = RiskAumSource.Net
+        mock_net_exposure.return_value = pd.DataFrame({
+            'date': ['2023-01-01', '2023-01-02'],
+            'netExposure': [1000, 2000],
+        })
+        pr = PerformanceReport(report_id='R1', position_source_id='MP1')
+        result = pr.get_aum(start_date=dt.date(2023, 1, 1), end_date=dt.date(2023, 1, 2))
+        assert result == {'2023-01-01': 1000, '2023-01-02': 2000}
+
+
+# ────────────────────────────────────────────────────────────
+# FactorRiskReport.get_factor_pnl() Percent branches
+# ────────────────────────────────────────────────────────────
+
+class TestFactorRiskReportGetFactorPnl:
+    """Cover branches in get_factor_pnl (lines 1271-1307)."""
+
+    def _make_factor_risk_report(self):
+        return FactorRiskReport(
+            report_id='FR1',
+            position_source_id='MP1',
+            position_source_type=PositionSourceType.Portfolio,
+        )
+
+    @patch.object(FactorRiskReport, 'get_results')
+    def test_notional_unit_returns_table(self, mock_get_results):
+        """Branch [1271,1272]: unit=Notional -> _format_multiple_factor_table."""
+        mock_get_results.return_value = [
+            {'date': '2023-01-01', 'factor': 'Style', 'pnl': 10},
+            {'date': '2023-01-02', 'factor': 'Style', 'pnl': 20},
+        ]
+        frr = self._make_factor_risk_report()
+        result = frr.get_factor_pnl(unit=FactorRiskUnit.Notional)
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.markets.report.get_factor_pnl_percent_for_single_factor')
+    @patch('gs_quant.markets.report.format_aum_for_return_calculation')
+    @patch.object(GsPortfolioApi, 'get_reports')
+    @patch.object(FactorRiskReport, 'get_results')
+    def test_percent_unit_factor_names_none_with_total(self, mock_get_results, mock_get_reports,
+                                                       mock_format_aum, mock_get_pnl_pct):
+        """Branches [1271,1274], [1274,1275]: unit=Percent, factor_names=None with Total in data.
+        Also [1288,1299] total_data present, [1300,1301] + [1300,1307] loop."""
+        mock_get_results.return_value = [
+            {'date': '2023-01-01', 'factor': 'Style', 'pnl': 10},
+            {'date': '2023-01-02', 'factor': 'Style', 'pnl': 20},
+            {'date': '2023-01-01', 'factor': 'Total', 'pnl': 30},
+            {'date': '2023-01-02', 'factor': 'Total', 'pnl': 50},
+        ]
+        perf_report_target = MagicMock()
+        perf_report_target.id = 'PR1'
+        perf_report_target.type_ = ReportType.Portfolio_Performance_Analytics
+        mock_get_reports.return_value = [perf_report_target]
+
+        frr = self._make_factor_risk_report()
+        frr.parameters = ReportParameters(tags=())
+
+        mock_perf_report = MagicMock(spec=PerformanceReport)
+        mock_perf_report.parameters = ReportParameters(tags=())
+
+        with patch.object(PerformanceReport, 'get', return_value=mock_perf_report):
+            mock_format_aum.return_value = pd.DataFrame({
+                'date': ['2023-01-01', '2023-01-02'],
+                'aum': [1000, 1000],
+            })
+            mock_get_pnl_pct.return_value = pd.Series(
+                [0.01, 0.02],
+                index=pd.Index(['2023-01-01', '2023-01-02'], name='date'),
+                name='pnlPercent',
+            )
+
+            result = frr.get_factor_pnl(unit=FactorRiskUnit.Percent, factor_names=None)
+            assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.markets.report.get_factor_pnl_percent_for_single_factor')
+    @patch('gs_quant.markets.report.format_aum_for_return_calculation')
+    @patch.object(GsPortfolioApi, 'get_reports')
+    @patch.object(FactorRiskReport, 'get_results')
+    def test_percent_unit_factor_names_none_no_total(self, mock_get_results, mock_get_reports,
+                                                     mock_format_aum, mock_get_pnl_pct):
+        """Branch [1288,1289]: factor_names=None, no Total -> fetches Total separately."""
+        mock_get_results.side_effect = [
+            [
+                {'date': '2023-01-01', 'factor': 'Style', 'pnl': 10},
+                {'date': '2023-01-02', 'factor': 'Style', 'pnl': 20},
+            ],
+            [
+                {'date': '2023-01-01', 'factor': 'Total', 'pnl': 30},
+                {'date': '2023-01-02', 'factor': 'Total', 'pnl': 50},
+            ],
+        ]
+        perf_report_target = MagicMock()
+        perf_report_target.id = 'PR1'
+        perf_report_target.type_ = ReportType.Portfolio_Performance_Analytics
+        mock_get_reports.return_value = [perf_report_target]
+
+        frr = self._make_factor_risk_report()
+        frr.parameters = ReportParameters(tags=())
+
+        mock_perf_report = MagicMock(spec=PerformanceReport)
+        mock_perf_report.parameters = ReportParameters(tags=())
+
+        with patch.object(PerformanceReport, 'get', return_value=mock_perf_report):
+            mock_format_aum.return_value = pd.DataFrame({
+                'date': ['2023-01-01', '2023-01-02'],
+                'aum': [1000, 1000],
+            })
+            mock_get_pnl_pct.return_value = pd.Series(
+                [0.01, 0.02],
+                index=pd.Index(['2023-01-01', '2023-01-02'], name='date'),
+                name='pnlPercent',
+            )
+
+            result = frr.get_factor_pnl(unit=FactorRiskUnit.Percent, factor_names=None)
+            assert isinstance(result, pd.DataFrame)
+            assert mock_get_results.call_count == 2
+
+    @patch('gs_quant.markets.report.get_factor_pnl_percent_for_single_factor')
+    @patch('gs_quant.markets.report.format_aum_for_return_calculation')
+    @patch.object(GsPortfolioApi, 'get_reports')
+    @patch.object(FactorRiskReport, 'get_results')
+    def test_percent_unit_factor_names_given_with_total(self, mock_get_results, mock_get_reports,
+                                                        mock_format_aum, mock_get_pnl_pct):
+        """Branches [1274,1277]: factor_names is not None (with Total already in data),
+        [1288,1299]: total_data not empty."""
+        mock_get_results.return_value = [
+            {'date': '2023-01-01', 'factor': 'Style', 'pnl': 10},
+            {'date': '2023-01-02', 'factor': 'Style', 'pnl': 20},
+            {'date': '2023-01-01', 'factor': 'Total', 'pnl': 30},
+            {'date': '2023-01-02', 'factor': 'Total', 'pnl': 50},
+        ]
+
+        perf_report_target = MagicMock()
+        perf_report_target.id = 'PR1'
+        perf_report_target.type_ = ReportType.Portfolio_Performance_Analytics
+        mock_get_reports.return_value = [perf_report_target]
+
+        frr = self._make_factor_risk_report()
+        frr.parameters = ReportParameters(tags=())
+
+        mock_perf_report = MagicMock(spec=PerformanceReport)
+        mock_perf_report.parameters = ReportParameters(tags=())
+
+        with patch.object(PerformanceReport, 'get', return_value=mock_perf_report):
+            mock_format_aum.return_value = pd.DataFrame({
+                'date': ['2023-01-01', '2023-01-02'],
+                'aum': [1000, 1000],
+            })
+            mock_get_pnl_pct.return_value = pd.Series(
+                [0.01, 0.02],
+                index=pd.Index(['2023-01-01', '2023-01-02'], name='date'),
+                name='pnlPercent',
+            )
+
+            result = frr.get_factor_pnl(
+                unit=FactorRiskUnit.Percent,
+                factor_names=['Style'],
+            )
+            assert isinstance(result, pd.DataFrame)
+
+
 if __name__ == '__main__':
     pytest.main(args=[__file__])

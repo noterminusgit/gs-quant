@@ -182,3 +182,67 @@ class TestNullcontext:
     def test_with_enter_result(self):
         with nullcontext(42) as val:
             assert val == 42
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 – additional branch-coverage tests
+# ---------------------------------------------------------------------------
+
+
+class TestContextMetaSetCurrentWithPathLen1NotEntered:
+    """Cover branch where len(path)==1 and cur.is_entered is False."""
+
+    def setup_method(self):
+        import threading
+        from gs_quant.context_base import thread_local
+        for attr in list(vars(thread_local)):
+            if 'MyContext' in attr or 'MyDefaultContext' in attr:
+                delattr(thread_local, attr)
+
+    def test_set_current_when_existing_not_entered(self):
+        """When path has exactly one element and that element is not entered,
+        setting current should succeed (line 62 is_entered is False)."""
+        ctx1 = MyContext()
+        MyContext.current = ctx1  # Sets path to (ctx1,)
+        ctx2 = MyContext()
+        # ctx1 is NOT entered (no `with` block), so is_entered = False
+        # This should succeed without raising
+        MyContext.current = ctx2
+        assert MyContext.current is ctx2
+        MyContext.pop()
+
+    def test_set_current_on_object_without_is_entered(self):
+        """When current doesn't have is_entered attribute -> AttributeError caught (line 64)."""
+        # Create a context whose current is a non-ContextBase object
+        # by directly manipulating the thread_local path
+        from gs_quant.context_base import thread_local
+        key = '{}_path'.format(MyContext.__name__)
+        sentinel = object()  # doesn't have is_entered
+        setattr(thread_local, key, (sentinel,))
+
+        # Setting current should catch AttributeError on sentinel.is_entered
+        ctx = MyContext()
+        MyContext.current = ctx
+        assert MyContext.current is ctx
+        MyContext.pop()
+
+
+class TestContextBaseCls:
+    """Cover branch where _cls returns self.__class__ (no ContextBase in bases)."""
+
+    def setup_method(self):
+        import threading
+        from gs_quant.context_base import thread_local
+        for attr in list(vars(thread_local)):
+            if 'MyContext' in attr or 'DeepChild' in attr:
+                delattr(thread_local, attr)
+
+    def test_cls_with_deep_hierarchy(self):
+        """Test _cls property with multi-level inheritance."""
+
+        class DeepChild(MyContext):
+            pass
+
+        dc = DeepChild()
+        # _cls should resolve to MyContext (which has ContextBase in its __bases__)
+        assert dc._cls is MyContext

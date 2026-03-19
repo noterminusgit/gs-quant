@@ -523,3 +523,131 @@ class TestPointSortOrder:
         # Should not raise; result depends on today's date
         result = point_sort_order('100')
         assert result == 100.0
+
+
+# ---------------------------------------------------------------------------
+# Phase-6: Cover remaining branches via mocking
+# ---------------------------------------------------------------------------
+
+from unittest.mock import patch
+
+
+class TestPointSortOrderDeadCodeBranches:
+    """Tests that cover branches guarded by ConstPoints pre-check.
+
+    Lines 158-171 are lowercase special values (o/n, t/n, Cash Stub, etc.)
+    that are normally intercepted by the ConstPoints.get(point.upper()) check
+    at line 144-146. We patch ConstPoints to bypass that check.
+
+    Also covers branch [111,117] (invalid rule in DictDayRule) and
+    branch [314,325] (RelativeReg rule not in DictDayRule).
+    """
+
+    def setup_method(self):
+        point_sort_order.cache_clear()
+
+    def teardown_method(self):
+        point_sort_order.cache_clear()
+
+    def test_lowercase_on(self):
+        """Cover branch [158,159]: point == 'o/n' -> days = 0."""
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            point_sort_order.cache_clear()
+            result = point_sort_order('o/n', dt.date(2020, 1, 1))
+            assert result == 0
+
+    def test_lowercase_tn(self):
+        """Cover branch [160,161]: point == 't/n' -> days = 0.1."""
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            point_sort_order.cache_clear()
+            result = point_sort_order('t/n', dt.date(2020, 1, 1))
+            assert result == 0.1
+
+    def test_lowercase_cash_stub(self):
+        """Cover branch [162,163]: point == 'Cash Stub' -> days = 1.1."""
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            point_sort_order.cache_clear()
+            result = point_sort_order('Cash Stub', dt.date(2020, 1, 1))
+            assert result == 1.1
+
+    def test_lowercase_cashstub(self):
+        """Cover branch [164,165]: point == 'CashStub' -> days = 1.1."""
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            point_sort_order.cache_clear()
+            result = point_sort_order('CashStub', dt.date(2020, 1, 1))
+            assert result == 1.1
+
+    def test_lowercase_default(self):
+        """Cover branch [166,167]: point == 'Default' -> days = 0."""
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            point_sort_order.cache_clear()
+            result = point_sort_order('Default', dt.date(2020, 1, 1))
+            assert result == 0
+
+    def test_lowercase_in(self):
+        """Cover branch [168,169]: point == 'In' -> days = 0.1."""
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            point_sort_order.cache_clear()
+            result = point_sort_order('In', dt.date(2020, 1, 1))
+            assert result == 0.1
+
+    def test_lowercase_out(self):
+        """Cover branch [170,171]: point == 'Out' -> days = 0.2."""
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            point_sort_order.cache_clear()
+            result = point_sort_order('Out', dt.date(2020, 1, 1))
+            assert result == 0.2
+
+    def test_infl_vol_zcswo_return_path(self):
+        """Cover branch [181,325]: ZCSwo sets days=3, then falls through to return.
+
+        With ConstPoints empty, 'ZCSwo' won't be intercepted and will reach
+        the infl_vol elif block.
+        """
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            point_sort_order.cache_clear()
+            result = point_sort_order('ZCSwo', dt.date(2020, 1, 1))
+            assert result == 3
+
+    def test_infl_vol_no_match_branch(self):
+        """Cover branch [181,325]: infl_vol regex matches but none of the 4 known
+        values. Requires patching infl_volReg to include an extra alternative.
+        """
+        import gs_quant.datetime.point as point_mod
+        original_reg = point_mod.infl_volReg
+        try:
+            # Add 'OtherVol' to the regex so it matches but falls through all elif
+            point_mod.infl_volReg = r"(Caplet|ZCCap|Swaption|ZCSwo|OtherVol)"
+            with patch('gs_quant.datetime.point.ConstPoints', {}):
+                point_sort_order.cache_clear()
+                result = point_sort_order('OtherVol', dt.date(2020, 1, 1))
+                # None of the if/elif match 'OtherVol', so days stays None
+                assert result is None
+        finally:
+            point_mod.infl_volReg = original_reg
+            point_sort_order.cache_clear()
+
+    def test_relative_reg_rule_not_in_dictdayrule(self):
+        """Cover branch [314,325]: RelativeReg matches but rule not in DictDayRule.
+
+        We need a RelativeReg match where capwords(group(2)) is not in DictDayRule.
+        RelativeReg = r'^([0-9]+) (day|week|month|year|DAY|WEEK|MONTH|YEAR)$'
+        capwords gives 'Day', 'Week', 'Month', 'Year' - all are in DictDayRule.
+        So we patch DictDayRule to not have 'Day'.
+        """
+        with patch('gs_quant.datetime.point.ConstPoints', {}):
+            with patch('gs_quant.datetime.point.DictDayRule', {'Month': 30, 'Week': 7, 'Year': 365}):
+                point_sort_order.cache_clear()
+                result = point_sort_order('5 day', dt.date(2020, 1, 1))
+                # 'day' -> capwords -> 'Day', not in patched DictDayRule -> days is None
+                assert result is None
+
+    def test_relative_date_add_invalid_rule(self):
+        """Cover branch [111,117]: rule in DateRuleReg but not in DictDayRule.
+
+        All regex-matched letters are in DictDayRule, so we patch DictDayRule
+        to remove a valid letter.
+        """
+        with patch('gs_quant.datetime.point.DictDayRule', {'m': 30, 'y': 365}):
+            with pytest.raises(MqValueError, match='no valid day rule'):
+                relative_date_add('1d')

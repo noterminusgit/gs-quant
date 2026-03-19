@@ -1072,5 +1072,168 @@ def test_layout_parsing():
     assert workspace.rows[0].components[1].height == 3
 
 
+# --------------------------------------------------------------------------- #
+#  Additional branch coverage tests
+# --------------------------------------------------------------------------- #
+
+class TestWorkspaceColumnExistingWidthExceeds12:
+    """Cover branch at line 118-119: existing __components width_sum > 12 raises error."""
+
+    def test_existing_components_width_sum_exceeds_12(self):
+        """Bypass setter to force __components with width_sum > 12, then trigger setter."""
+        col = WorkspaceColumn(components=[])
+        # Directly set internal __components to something with width > 12
+        c_wide1 = PlotComponent(200, id_='w1', width=7)
+        c_wide2 = PlotComponent(200, id_='w2', width=7)
+        col._WorkspaceColumn__components = [c_wide1, c_wide2]  # width_sum = 14 > 12
+        with pytest.raises(MqValueError, match='exceeds the max sum of widths of 12'):
+            col.components = [PlotComponent(200, id_='new')]
+
+
+class TestWorkspaceRowExistingWidthExceeds12:
+    """Cover branch at line 218-219: existing __components width_sum > 12 raises error."""
+
+    def test_existing_components_width_sum_exceeds_12(self):
+        """Bypass setter to force __components with width_sum > 12, then trigger setter."""
+        row = WorkspaceRow(components=[])
+        # Directly set internal __components to something with width > 12
+        c_wide1 = PlotComponent(200, id_='w1', width=7)
+        c_wide2 = PlotComponent(200, id_='w2', width=7)
+        row._WorkspaceRow__components = [c_wide1, c_wide2]  # width_sum = 14 > 12
+        with pytest.raises(MqValueError, match='exceeds the max sum of widths of 12'):
+            row.components = [PlotComponent(200, id_='new')]
+
+
+class TestParseBranch514to519:
+    """Cover branch 514->519: current_str starts with neither 'c' nor 'r' at top level."""
+
+    def test_parse_unknown_prefix_skipped(self):
+        """When a top-level token doesn't start with 'c' or 'r', it is skipped."""
+        components = [
+            {'id': 'c1', 'type': 'plot', 'parameters': {'height': 200}},
+        ]
+        # 'x(y)' is a token that starts with 'x', not 'c' or 'r', so the branch
+        # at 514 is False and we fall through to current_str = '' at 519
+        result = Workspace._parse('x(y)c12($0)', components)
+        # Only the c12($0) component should be parsed
+        assert len(result) == 1
+        assert isinstance(result[0], PlotComponent)
+
+
+class TestModuleLevelGetLayout:
+    """Cover the module-level __get_layout function (lines 629-673)."""
+
+    def _get_fn(self):
+        """Get a reference to the module-level __get_layout function."""
+        from gs_quant.analytics.workspaces import workspace as ws_mod
+        return getattr(ws_mod, '__get_layout')
+
+    def _make_component(self, width=None, height=200):
+        return PlotComponent(height, id_='test-id', width=width)
+
+    def test_equal_spread_simple(self):
+        """Branch: width_sum == 0, components are plain (not WorkspaceRow/Column)."""
+        fn = self._get_fn()
+        c1 = self._make_component()
+        c2 = self._make_component()
+        layout, count = fn([c1, c2], 0)
+        assert layout == 'r(c6($0)c6($1))'
+        assert count == 2
+
+    def test_equal_spread_with_remainder(self):
+        """Branch: last_size != 0, last component gets extra width."""
+        fn = self._get_fn()
+        comps = [self._make_component() for _ in range(5)]
+        layout, count = fn(comps, 0)
+        # 12 / 5 = 2, remainder = 2; last component gets 2+2=4
+        assert 'c4($4)' in layout
+        assert count == 5
+
+    def test_equal_spread_with_workspace_row(self):
+        """Branch: isinstance(component, WorkspaceRow) in equal-spread path (line 640-641)."""
+        fn = self._get_fn()
+        c1 = self._make_component()
+        nested_row = WorkspaceRow(components=[c1])
+        c2 = self._make_component()
+        layout, count = fn([nested_row, c2], 0)
+        # nested_row should produce a sub_layout wrapped in c...()
+        assert layout.startswith('r(')
+        assert layout.endswith(')')
+        assert count == 2
+
+    def test_equal_spread_with_workspace_column(self):
+        """Branch: isinstance(component, WorkspaceColumn) in equal-spread path (line 645-646)."""
+        fn = self._get_fn()
+        c1 = self._make_component()
+        inner_col = WorkspaceColumn(components=[c1])
+        c2 = self._make_component()
+        layout, count = fn([inner_col, c2], 0)
+        assert layout.startswith('r(')
+        assert count == 2
+
+    def test_equal_spread_last_is_row_with_remainder(self):
+        """Branch: last component is WorkspaceRow with remainder (last_size != 0 and i == last)."""
+        fn = self._get_fn()
+        comps = [self._make_component() for _ in range(4)]
+        nested_row = WorkspaceRow(components=[self._make_component()])
+        comps.append(nested_row)  # 5 components, remainder = 2
+        layout, count = fn(comps, 0)
+        assert count == 5
+
+    def test_equal_spread_last_is_column_with_remainder(self):
+        """Branch: last component is WorkspaceColumn with remainder."""
+        fn = self._get_fn()
+        comps = [self._make_component() for _ in range(4)]
+        inner_col = WorkspaceColumn(components=[self._make_component()])
+        comps.append(inner_col)  # 5 components, remainder = 2
+        layout, count = fn(comps, 0)
+        assert count == 5
+
+    def test_with_widths_sum_12(self):
+        """Branch: width_sum == 12 => default_width = 0."""
+        fn = self._get_fn()
+        c1 = self._make_component(width=6)
+        c2 = self._make_component(width=6)
+        layout, count = fn([c1, c2], 0)
+        assert 'c6($0)c6($1)' in layout
+        assert count == 2
+
+    def test_with_widths_not_12_and_none_widths(self):
+        """Branch: width_sum != 0 and != 12, with a None-width component (line 659)."""
+        fn = self._get_fn()
+        c1 = self._make_component(width=4)
+        c2 = self._make_component()  # width is None
+        c3 = self._make_component()  # width is None, last
+        layout, count = fn([c1, c2, c3], 0)
+        assert count == 3
+
+    def test_last_component_no_width(self):
+        """Branch: i == components_length - 1 and not component.width (line 661-662)."""
+        fn = self._get_fn()
+        c1 = self._make_component(width=4)
+        c2 = self._make_component()  # last, no width => c{12-used_sum}
+        layout, count = fn([c1, c2], 0)
+        assert 'c4($0)' in layout
+        assert 'c8($1)' in layout
+        assert count == 2
+
+    def test_component_width_none_not_last(self):
+        """Branch: component.width is None (not last) in non-equal path (line 663-665)."""
+        fn = self._get_fn()
+        c1 = self._make_component(width=4)
+        c2 = self._make_component()  # width None, not last
+        c3 = self._make_component(width=4)  # has width, last
+        layout, count = fn([c1, c2, c3], 0)
+        assert count == 3
+
+    def test_component_with_explicit_width(self):
+        """Branch: component has width (line 667-669)."""
+        fn = self._get_fn()
+        c1 = self._make_component(width=8)
+        c2 = self._make_component(width=4)
+        layout, count = fn([c1, c2], 0)
+        assert 'c8($0)c4($1)' in layout
+
+
 if __name__ == '__main__':
     pytest.main(args=["test_workspace.py"])

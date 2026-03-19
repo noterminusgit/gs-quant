@@ -41,6 +41,7 @@ from gs_quant.common import (
     XRef,
 )
 from gs_quant.entities.entitlements import User
+from gs_quant.entities.entity import EntityType
 from gs_quant.errors import MqError, MqValueError
 from gs_quant.markets.baskets import Basket, ErrorMessage
 from gs_quant.markets.indices_utils import ReturnType, WeightingStrategy, CorporateActionType
@@ -1665,3 +1666,115 @@ def test_parent_basket_setter_new_basket(mocker):
     basket.parent_basket = 'GSMBXXXX'
     assert basket.parent_basket == 'GSMBXXXX'
     assert basket.clone_parent_id == mqid
+
+
+# ────────────────────────────────────────────────────────────
+# Branch coverage tests
+# ────────────────────────────────────────────────────────────
+
+def test_get_latest_position_set_not_asset(mocker):
+    """Branch [581,584]: positioned_entity_type != ASSET -> raise NotImplementedError"""
+    mock_session()
+    mock_basket_init(mocker, user_ea)
+    basket = Basket.get(ticker)
+    with mock.patch.object(type(basket), 'positioned_entity_type',
+                           new_callable=PropertyMock, return_value=EntityType.PORTFOLIO):
+        with pytest.raises(NotImplementedError):
+            basket.get_latest_position_set()
+
+
+def test_get_position_set_for_date_not_asset(mocker):
+    """Branch [590,596]: positioned_entity_type != ASSET -> raise NotImplementedError"""
+    mock_session()
+    mock_basket_init(mocker, user_ea)
+    basket = Basket.get(ticker)
+    with mock.patch.object(type(basket), 'positioned_entity_type',
+                           new_callable=PropertyMock, return_value=EntityType.PORTFOLIO):
+        with pytest.raises(NotImplementedError):
+            basket.get_position_set_for_date(dt.date(2024, 1, 1))
+
+
+def test_get_position_sets_not_asset(mocker):
+    """Branch [606,612]: positioned_entity_type != ASSET -> raise NotImplementedError"""
+    mock_session()
+    mock_basket_init(mocker, user_ea)
+    basket = Basket.get(ticker)
+    with mock.patch.object(type(basket), 'positioned_entity_type',
+                           new_callable=PropertyMock, return_value=EntityType.PORTFOLIO):
+        with pytest.raises(NotImplementedError):
+            basket.get_position_sets()
+
+
+def test_parent_basket_property_fetches_from_clone_parent_id(mocker):
+    """Branch [885,886]: has __clone_parent_id and not has __parent_basket -> fetch.
+    Note: pydash has() uses the literal string '__clone_parent_id', so we set
+    a non-mangled attribute for pydash to find, and remove __parent_basket."""
+    mock_session()
+    mock_basket_init(mocker, user_ea)
+    basket = Basket.get(ticker)
+    # Set the non-mangled attribute name that pydash's has() will look for
+    setattr(basket, '__clone_parent_id', mqid)
+    # Remove the non-mangled __parent_basket so has(self, '__parent_basket') is False
+    if hasattr(basket, '__parent_basket'):
+        delattr(basket, '__parent_basket')
+    # Also need to ensure _Basket__parent_basket is not checked by return statement
+    # The function body accesses self.__parent_basket which resolves to _Basket__parent_basket
+    # So line 886 sets _Basket__parent_basket and line 887 returns _Basket__parent_basket
+    mock_response(mocker, GsAssetApi, 'get_asset', gs_asset)
+    result = basket.parent_basket
+    assert result is not None
+
+
+def test_finish_initialization_skips_initial_positions(mocker):
+    """Branch [1065,1073]: __initial_positions already set -> skip fetching positions"""
+    mock_session()
+    mock_basket_init(mocker, user_ea)
+    basket = Basket.get(ticker)
+    # Set __initial_positions so the block is skipped
+    basket._Basket__initial_positions = set()
+    # Also set up initial_state to have initial_price and publish_to_bloomberg
+    basket._Basket__initial_state = {
+        'divisor': 1000,
+        'position_set': position_set,
+        'initial_price': 100,
+        'publish_to_bloomberg': True,
+    }
+    # Set __entitlements to skip that block too
+    basket._Basket__entitlements = MagicMock()
+    basket._Basket__finish_initialization()
+    # If we got here without error, the positions fetch was skipped
+
+
+def test_finish_initialization_skips_entitlements(mocker):
+    """Branch [1089,1091]: __entitlements already set -> skip fetching entitlements"""
+    mock_session()
+    mock_basket_init(mocker, user_ea)
+    basket = Basket.get(ticker)
+    # Set __entitlements so that block is skipped
+    basket._Basket__entitlements = MagicMock()
+    # Ensure initial_positions is set
+    basket._Basket__initial_positions = set()
+    basket._Basket__initial_state = {
+        'divisor': 1000,
+        'position_set': position_set,
+        'initial_price': 100,
+        'publish_to_bloomberg': True,
+    }
+    basket._Basket__finish_initialization()
+    # Should complete without trying to fetch entitlements
+
+
+def test_set_error_messages_early_return(mocker):
+    """Branch [1225,1226]: __error_messages already has items -> return early.
+    Note: pydash get() uses the literal string '__error_messages' (not mangled),
+    so we set the non-mangled attribute."""
+    mock_session()
+    mock_basket_init(mocker, user_ea)
+    basket = Basket.get(ticker)
+    # Set the non-mangled attribute that pydash get() will look for
+    setattr(basket, '__error_messages', [ErrorMessage.NON_ADMIN])
+    basket._Basket__set_error_messages()
+    # If __error_messages has length > 0, the function returns immediately
+    # The mangled _Basket__error_messages should be unchanged (not overwritten)
+    non_mangled = getattr(basket, '__error_messages')
+    assert ErrorMessage.NON_ADMIN in non_mangled

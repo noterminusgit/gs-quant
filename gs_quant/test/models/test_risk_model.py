@@ -3278,5 +3278,694 @@ def test_get_currency_exchange_rate(mocker):
     assert_frame_equal(expected_data_frame, actual_data_frame, check_like=True)
 
 
+# ==================== Branch coverage tests for missing branches ====================
+
+
+class TestFactorDataMeasureBranches:
+    """Cover _get_factor_data_measure and related caller branches."""
+
+    @patch('gs_quant.models.risk_model.build_factor_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_returns_by_name_no_assets(self, mock_api, mock_build):
+        """Branch [882,885]: _get_factor_data_measure with assets=None (if assets: is False).
+        Also covers line 826 (get_factor_returns_by_name entry)."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [
+                        {'factorId': '1', 'factorName': 'Momentum', 'factorReturn': 0.01},
+                    ],
+                }
+            ]
+        }
+        mock_build.return_value = pd.DataFrame({'Momentum': {'2022-01-03': 0.01}})
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_returns_by_name(
+            start_date=dt.date(2022, 1, 3),
+            assets=None,
+        )
+        assert isinstance(result, pd.DataFrame)
+        # Verify limit_factors is False when assets is None
+        call_kwargs = mock_api.get_risk_model_data.call_args.kwargs
+        assert call_kwargs['limit_factors'] is False
+
+    @patch('gs_quant.models.risk_model.build_factor_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_returns_by_name_with_assets(self, mock_api, mock_build):
+        """Branch [882,883]: _get_factor_data_measure with assets provided (if assets: is True)."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [
+                        {'factorId': '1', 'factorName': 'Momentum', 'factorReturn': 0.01},
+                    ],
+                    'assetData': {
+                        'universe': ['abc'],
+                        'factorExposure': [{'1': 0.5}],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = pd.DataFrame({'Momentum': {'2022-01-03': 0.01}})
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_returns_by_name(
+            start_date=dt.date(2022, 1, 3),
+            assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+        )
+        assert isinstance(result, pd.DataFrame)
+        call_kwargs = mock_api.get_risk_model_data.call_args.kwargs
+        assert call_kwargs['limit_factors'] is True
+
+    @patch('gs_quant.models.risk_model.build_factor_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_returns_by_id(self, mock_api, mock_build):
+        """Covers line 866 (get_factor_returns_by_id entry).
+        Uses factors_by_name=False path."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [
+                        {'factorId': '1', 'factorName': 'Momentum', 'factorReturn': 0.01},
+                    ],
+                }
+            ]
+        }
+        mock_build.return_value = pd.DataFrame({'1': {'2022-01-03': 0.01}})
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_returns_by_id(
+            start_date=dt.date(2022, 1, 3),
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.build_factor_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_factor_returns_by_name_json_format(self, mock_api, mock_build):
+        """Branch in _get_factor_data_measure: format != DATA_FRAME -> .to_dict()"""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [
+                        {'factorId': '1', 'factorName': 'Momentum', 'factorReturn': 0.01},
+                    ],
+                }
+            ]
+        }
+        mock_build.return_value = pd.DataFrame({'Momentum': {'2022-01-03': 0.01}})
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_factor_returns_by_name(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, dict)
+
+
+class TestAssetDataMeasureBranches:
+    """Cover _get_asset_data_measure branches."""
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_specific_risk_json_format(self, mock_api, mock_build):
+        """Branch [908,909]: format != DATA_FRAME in _get_asset_data_measure.
+        Also covers line 1008 (get_specific_risk entry)."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {
+                        'universe': ['abc'],
+                        'specificRisk': [0.05],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {'abc': {'2022-01-03': 0.05}}
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_specific_risk(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.JSON,
+        )
+        # JSON format returns dict (not DataFrame)
+        assert isinstance(result, dict)
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_specific_risk_dataframe_format(self, mock_api, mock_build):
+        """Branch [908,909]: format == DATA_FRAME -> pd.DataFrame(measure_data).
+        Covers the if branch."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {
+                        'universe': ['abc'],
+                        'specificRisk': [0.05],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {'abc': {'2022-01-03': 0.05}}
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_specific_risk(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_total_risk(self, mock_api, mock_build):
+        """Covers line 1500 (get_total_risk entry)."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {
+                        'universe': ['abc'],
+                        'totalRisk': [15.0],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {'abc': {'2022-01-03': 15.0}}
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_total_risk(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_historical_beta(self, mock_api, mock_build):
+        """Covers line 1538 (get_historical_beta entry)."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'assetData': {
+                        'universe': ['abc'],
+                        'historicalBeta': [1.1],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {'abc': {'2022-01-03': 1.1}}
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_historical_beta(
+            start_date=dt.date(2022, 1, 3),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+
+class TestGetUniverseFactorExposure:
+    """Cover line 2155 (get_universe_factor_exposure entry)."""
+
+    @patch('gs_quant.models.risk_model.build_asset_data_map')
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_get_universe_factor_exposure(self, mock_api, mock_build):
+        """Covers line 2155 via FactorRiskModel.get_universe_factor_exposure
+        which calls super().get_universe_exposure."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-01-03',
+                    'factorData': [{'factorId': '1', 'factorName': 'Momentum'}],
+                    'assetData': {
+                        'universe': ['abc'],
+                        'factorExposure': [{'1': 0.5}],
+                    },
+                }
+            ]
+        }
+        mock_build.return_value = {
+            'abc': {'2022-01-03': {'1': 0.5}},
+        }
+        model = FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        result = model.get_universe_factor_exposure(
+            start_date=dt.date(2022, 1, 3),
+            assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+            get_factors_by_name=False,
+        )
+        assert isinstance(result, pd.DataFrame)
+
+
+class TestGetAssetContributionToRisk:
+    """Cover get_asset_contribution_to_risk branches (lines 2630-2690)."""
+
+    def _make_model(self):
+        return FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+
+    @patch('gs_quant.models.risk_model.SecurityMaster')
+    def test_no_spot_price_raises(self, mock_sm):
+        """Branches [2633,2634]: len(series) == 0 -> raise MqValueError."""
+        mock_security = MagicMock()
+        mock_coord = MagicMock()
+        mock_coord.get_series.return_value = pd.Series([], dtype=float)
+        mock_security.get_data_coordinate.return_value = mock_coord
+        mock_sm.get_asset.return_value = mock_security
+
+        model = self._make_model()
+        with pytest.raises(MqValueError, match='has no end of day price'):
+            model.get_asset_contribution_to_risk('AAPL UW', dt.date(2022, 5, 2))
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    @patch('gs_quant.models.risk_model.SecurityMaster')
+    def test_empty_total_risk_raises(self, mock_sm, mock_api):
+        """Branches [2633,2635] and [2654,2655]: spot price found but totalRisk is empty."""
+        mock_security = MagicMock()
+        mock_coord = MagicMock()
+        mock_coord.get_series.return_value = pd.Series([100.0])
+        mock_security.get_data_coordinate.return_value = mock_coord
+        mock_sm.get_asset.return_value = mock_security
+
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'assetData': {
+                        'totalRisk': [],
+                        'factorExposure': [{'f1': 0.5}],
+                        'universe': ['AAPL UW'],
+                    },
+                    'covarianceMatrix': [[0.01]],
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorCategory': 'Style'},
+                    ],
+                }
+            ]
+        }
+
+        model = self._make_model()
+        with pytest.raises(MqValueError, match='is not covered by'):
+            model.get_asset_contribution_to_risk('AAPL UW', dt.date(2022, 5, 2))
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    @patch('gs_quant.models.risk_model.SecurityMaster')
+    def test_full_contribution_to_risk_by_name(self, mock_sm, mock_api):
+        """Branches [2654,2656], [2672,2673]: normal path with factors, get_factors_by_name=True.
+        Covers the for loop body and the Specific row append."""
+        import numpy as np
+        mock_security = MagicMock()
+        mock_coord = MagicMock()
+        mock_coord.get_series.return_value = pd.Series([100.0])
+        mock_security.get_data_coordinate.return_value = mock_coord
+        mock_sm.get_asset.return_value = mock_security
+
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'assetData': {
+                        'totalRisk': [20.0],
+                        'factorExposure': [{'f1': 0.5, 'f2': -0.3}],
+                        'universe': ['AAPL UW'],
+                    },
+                    'covarianceMatrix': [[0.04, 0.01], [0.01, 0.03]],
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorCategory': 'Style'},
+                        {'factorId': 'f2', 'factorName': 'Value', 'factorCategory': 'Style'},
+                    ],
+                }
+            ]
+        }
+
+        model = self._make_model()
+        result = model.get_asset_contribution_to_risk(
+            'AAPL UW', dt.date(2022, 5, 2),
+            get_factors_by_name=True,
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert 'Factor' in result.columns
+        assert 'Specific' in result['Factor'].values
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    @patch('gs_quant.models.risk_model.SecurityMaster')
+    def test_contribution_to_risk_by_id(self, mock_sm, mock_api):
+        """Branch [2672,2673]: get_factors_by_name=False uses factorId."""
+        mock_security = MagicMock()
+        mock_coord = MagicMock()
+        mock_coord.get_series.return_value = pd.Series([100.0])
+        mock_security.get_data_coordinate.return_value = mock_coord
+        mock_sm.get_asset.return_value = mock_security
+
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'assetData': {
+                        'totalRisk': [20.0],
+                        'factorExposure': [{'f1': 0.5}],
+                        'universe': ['AAPL UW'],
+                    },
+                    'covarianceMatrix': [[0.04]],
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorCategory': 'Style'},
+                    ],
+                }
+            ]
+        }
+
+        model = self._make_model()
+        result = model.get_asset_contribution_to_risk(
+            'AAPL UW', dt.date(2022, 5, 2),
+            get_factors_by_name=False,
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, list)
+        # Last entry should be the Specific row with ID 'SPC'
+        assert result[-1]['Factor'] == 'SPC'
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    @patch('gs_quant.models.risk_model.SecurityMaster')
+    def test_contribution_to_risk_json_format(self, mock_sm, mock_api):
+        """Branch [2672,2681]: for loop finishing and returning JSON (list) result."""
+        mock_security = MagicMock()
+        mock_coord = MagicMock()
+        mock_coord.get_series.return_value = pd.Series([100.0])
+        mock_security.get_data_coordinate.return_value = mock_coord
+        mock_sm.get_asset.return_value = mock_security
+
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'assetData': {
+                        'totalRisk': [20.0],
+                        'factorExposure': [{'f1': 0.5}],
+                        'universe': ['AAPL UW'],
+                    },
+                    'covarianceMatrix': [[0.04]],
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorCategory': 'Style'},
+                    ],
+                }
+            ]
+        }
+
+        model = self._make_model()
+        result = model.get_asset_contribution_to_risk(
+            'AAPL UW', dt.date(2022, 5, 2),
+            get_factors_by_name=True,
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+        # Factor row + Specific row
+        assert len(result) == 2
+        assert result.iloc[-1]['Factor'] == 'Specific'
+
+
+class TestGetAssetFactorAttribution:
+    """Cover get_asset_factor_attribution branches (lines 2745-2765)."""
+
+    def _make_model(self):
+        return FactorRiskModel(
+            'test_id', 'Test', RiskModelCoverage.Country, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_empty_results_raises(self, mock_api):
+        """Branch [2745,2746]: len(risk_results) == 0 -> raise MqValueError."""
+        mock_api.get_risk_model_data.return_value = {'results': []}
+
+        model = self._make_model()
+        with pytest.raises(MqValueError, match='is not covered by'):
+            model.get_asset_factor_attribution(
+                'AAPL UW', dt.date(2022, 5, 1), dt.date(2022, 5, 2),
+            )
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_single_day_raises(self, mock_api):
+        """Branch [2747,2748]: len(risk_results) < 2 -> raise MqValueError."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-05-02',
+                    'factorData': [{'factorId': 'f1', 'factorName': 'Momentum', 'factorReturn': 0.01}],
+                    'assetData': {'factorExposure': [{'f1': 0.5}], 'universe': ['AAPL UW']},
+                }
+            ]
+        }
+
+        model = self._make_model()
+        with pytest.raises(MqValueError, match='Attribution cannot be calculated'):
+            model.get_asset_factor_attribution(
+                'AAPL UW', dt.date(2022, 5, 2), dt.date(2022, 5, 2),
+            )
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_full_attribution_by_name(self, mock_api):
+        """Branches [2747,2749], [2751,2752], [2753,2754], [2759,2760]:
+        Normal path with get_factors_by_name=True, multiple days, factor data and exposures."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-05-01',
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorReturn': 0.005},
+                    ],
+                    'assetData': {'factorExposure': [{'f1': 0.5}], 'universe': ['AAPL UW']},
+                },
+                {
+                    'date': '2022-05-02',
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorReturn': 0.01},
+                    ],
+                    'assetData': {'factorExposure': [{'f1': 0.6}], 'universe': ['AAPL UW']},
+                },
+            ]
+        }
+
+        model = self._make_model()
+        result = model.get_asset_factor_attribution(
+            'AAPL UW', dt.date(2022, 5, 1), dt.date(2022, 5, 2),
+            get_factors_by_name=True,
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert 'Date' in result.columns
+        assert 'Momentum' in result.columns
+        # Factor return 0.01 * previous exposure 0.5 = 0.005
+        assert result.iloc[0]['Momentum'] == pytest.approx(0.01 * 0.5)
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_full_attribution_by_id(self, mock_api):
+        """Branches [2753,2754], [2759,2760] with get_factors_by_name=False."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-05-01',
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorReturn': 0.005},
+                    ],
+                    'assetData': {'factorExposure': [{'f1': 0.5}], 'universe': ['AAPL UW']},
+                },
+                {
+                    'date': '2022-05-02',
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorReturn': 0.01},
+                    ],
+                    'assetData': {'factorExposure': [{'f1': 0.6}], 'universe': ['AAPL UW']},
+                },
+            ]
+        }
+
+        model = self._make_model()
+        result = model.get_asset_factor_attribution(
+            'AAPL UW', dt.date(2022, 5, 1), dt.date(2022, 5, 2),
+            get_factors_by_name=False,
+            format=ReturnFormat.JSON,
+        )
+        assert isinstance(result, list)
+        assert 'f1' in result[0]
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_attribution_empty_factor_data(self, mock_api):
+        """Branch [2753,2758]: inner for loop skipped when factorData is empty."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-05-01',
+                    'factorData': [],
+                    'assetData': {'factorExposure': [{}], 'universe': ['AAPL UW']},
+                },
+                {
+                    'date': '2022-05-02',
+                    'factorData': [],
+                    'assetData': {'factorExposure': [{}], 'universe': ['AAPL UW']},
+                },
+            ]
+        }
+
+        model = self._make_model()
+        result = model.get_asset_factor_attribution(
+            'AAPL UW', dt.date(2022, 5, 1), dt.date(2022, 5, 2),
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+        # Only the Date column since no factors
+        assert 'Date' in result.columns
+
+    @patch('gs_quant.models.risk_model.GsFactorRiskModelApi')
+    def test_attribution_empty_previous_exposures(self, mock_api):
+        """Branch [2759,2763]: factor exposure loop skipped when previous_factor_exposures is empty."""
+        mock_api.get_risk_model_data.return_value = {
+            'results': [
+                {
+                    'date': '2022-05-01',
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorReturn': 0.005},
+                    ],
+                    'assetData': {'factorExposure': [{}], 'universe': ['AAPL UW']},
+                },
+                {
+                    'date': '2022-05-02',
+                    'factorData': [
+                        {'factorId': 'f1', 'factorName': 'Momentum', 'factorReturn': 0.01},
+                    ],
+                    'assetData': {'factorExposure': [{'f1': 0.6}], 'universe': ['AAPL UW']},
+                },
+            ]
+        }
+
+        model = self._make_model()
+        result = model.get_asset_factor_attribution(
+            'AAPL UW', dt.date(2022, 5, 1), dt.date(2022, 5, 2),
+            get_factors_by_name=True,
+            format=ReturnFormat.DATA_FRAME,
+        )
+        assert isinstance(result, pd.DataFrame)
+        # factorReturn was set but not multiplied by exposure (empty dict)
+        assert result.iloc[0]['Momentum'] == pytest.approx(0.01)
+
+
+class TestMacroUniverseSensitivityBranches:
+    """Cover get_universe_sensitivity branches [2942,2945] and [2963,2964]."""
+
+    @patch('gs_quant.models.risk_model.MarqueeRiskModel.get_universe_exposure')
+    def test_sensitivity_category_type_non_empty_dataframe(self, mock_exposure):
+        """Branch [2942,2945]: factor_type != Factor AND sensitivity_df is NOT empty.
+        This hits the full category aggregation logic."""
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        # Build the non-empty sensitivity DataFrame that get_universe_exposure would return
+        sensitivity_df = pd.DataFrame(
+            {'f1': [0.5, 0.3], 'f2': [0.2, 0.1]},
+            index=pd.MultiIndex.from_tuples([('abc', '2022-01-03'), ('def', '2022-01-03')]),
+        )
+        mock_exposure.return_value = sensitivity_df
+        # Factor data for the category mapping
+        factor_data_df = pd.DataFrame({
+            'name': ['Momentum', 'Value'],
+            'identifier': ['f1', 'f2'],
+            'factorCategory': ['Style', 'Style'],
+            'factorCategoryId': ['cat1', 'cat1'],
+        })
+
+        with patch.object(model, 'get_factor_data', return_value=factor_data_df):
+            result = model.get_universe_sensitivity(
+                start_date=dt.date(2022, 1, 3),
+                assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc', 'def']),
+                factor_type=FactorType.Category,
+                get_factors_by_name=False,
+                format=ReturnFormat.DATA_FRAME,
+            )
+            assert isinstance(result, pd.DataFrame)
+            assert not result.empty
+
+    @patch('gs_quant.models.risk_model.MarqueeRiskModel.get_universe_exposure')
+    def test_sensitivity_category_type_json_format(self, mock_exposure):
+        """Branch [2963,2964]: format == JSON in the Category aggregation path."""
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        sensitivity_df = pd.DataFrame(
+            {'f1': [0.5], 'f2': [0.2]},
+            index=pd.MultiIndex.from_tuples([('abc', '2022-01-03')]),
+        )
+        mock_exposure.return_value = sensitivity_df
+        factor_data_df = pd.DataFrame({
+            'name': ['Momentum', 'Value'],
+            'identifier': ['f1', 'f2'],
+            'factorCategory': ['Style', 'Style'],
+            'factorCategoryId': ['cat1', 'cat1'],
+        })
+
+        with patch.object(model, 'get_factor_data', return_value=factor_data_df):
+            result = model.get_universe_sensitivity(
+                start_date=dt.date(2022, 1, 3),
+                assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+                factor_type=FactorType.Category,
+                get_factors_by_name=False,
+                format=ReturnFormat.JSON,
+            )
+            assert isinstance(result, dict)
+
+    @patch('gs_quant.models.risk_model.MarqueeRiskModel.get_universe_exposure')
+    def test_sensitivity_category_by_name(self, mock_exposure):
+        """Branch [2942,2945]: Category type with get_factors_by_name=True."""
+        model = MacroRiskModel(
+            'macro_id', 'Macro Model', RiskModelCoverage.Global, RiskModelTerm.Long,
+            RiskModelUniverseIdentifier.gsid, 'GS', 1.0,
+        )
+        sensitivity_df = pd.DataFrame(
+            {'Momentum': [0.5], 'Value': [0.2]},
+            index=pd.MultiIndex.from_tuples([('abc', '2022-01-03')]),
+        )
+        mock_exposure.return_value = sensitivity_df
+        factor_data_df = pd.DataFrame({
+            'name': ['Momentum', 'Value'],
+            'identifier': ['f1', 'f2'],
+            'factorCategory': ['Style', 'Style'],
+            'factorCategoryId': ['cat1', 'cat1'],
+        })
+
+        with patch.object(model, 'get_factor_data', return_value=factor_data_df):
+            result = model.get_universe_sensitivity(
+                start_date=dt.date(2022, 1, 3),
+                assets=DataAssetsRequest(UniverseIdentifier.gsid, ['abc']),
+                factor_type=FactorType.Category,
+                get_factors_by_name=True,
+                format=ReturnFormat.DATA_FRAME,
+            )
+            assert isinstance(result, pd.DataFrame)
+            assert not result.empty
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

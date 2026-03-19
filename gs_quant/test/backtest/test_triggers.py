@@ -1447,3 +1447,105 @@ class TestTriggerSubclasses:
 
     def test_event_trigger_class_type(self):
         assert EventTrigger.__dataclass_fields__['class_type'].default == 'event_trigger'
+
+
+# =============================================================================
+# Phase 6 – additional branch-coverage tests
+# =============================================================================
+
+
+class TestNotTriggerRequirementsSetattr:
+    """Cover branch [266,-265]: __setattr__ for non-'trigger' keys."""
+
+    def test_setattr_non_trigger_key(self):
+        """Setting a key other than 'trigger' should NOT call super().__setattr__
+        via the trigger branch -> branch [266,-265]."""
+        req = NotTriggerRequirements.__new__(NotTriggerRequirements)
+        # Setting 'class_type' which is != 'trigger' should go through the else branch
+        # (or rather, the `if key == 'trigger'` is False, so __setattr__ does nothing
+        # for non-trigger keys in the custom implementation)
+        # Actually: the custom __setattr__ only calls super().__setattr__ when key=='trigger'
+        # For other keys, nothing happens (the method returns without calling super).
+        # But Python's dataclass init will call __setattr__ for all fields.
+        # We need to test that setting a non-trigger key doesn't break.
+        # The branch [266,-265] means: line 266 `if key == 'trigger'` is False -> return
+        req.__dict__['trigger'] = None  # bypass __setattr__
+        req.__dict__['class_type'] = 'test'
+        # Now call __setattr__ with a non-trigger key
+        req.__setattr__('class_type', 'new_val')
+        # Since key != 'trigger', the custom __setattr__ does nothing,
+        # so the value should NOT change via super().__setattr__
+        assert req.__dict__.get('class_type') == 'test'
+
+    def test_setattr_trigger_key_with_trigger_instance(self):
+        """Setting trigger key with a Trigger instance extracts trigger_requirements."""
+        mock_trigger = MagicMock(spec=Trigger)
+        mock_trigger.trigger_requirements = MagicMock(spec=TriggerRequirements)
+
+        req = NotTriggerRequirements.__new__(NotTriggerRequirements)
+        req.__dict__['class_type'] = 'not_trigger_requirements'
+        req.trigger = mock_trigger
+        # Should have been replaced with trigger_requirements
+        assert req.trigger is mock_trigger.trigger_requirements
+
+    def test_setattr_trigger_key_with_requirements(self):
+        """Setting trigger key with TriggerRequirements directly."""
+        mock_req = MagicMock(spec=TriggerRequirements)
+        req = NotTriggerRequirements.__new__(NotTriggerRequirements)
+        req.__dict__['class_type'] = 'not_trigger_requirements'
+        req.trigger = mock_req
+        assert req.trigger is mock_req
+
+
+class TestPortfolioTriggerRequirementsExtraBranches:
+    """Cover branches [334,339], [337,339] in PortfolioTriggerRequirements."""
+
+    def test_below_not_triggered(self):
+        """BELOW direction, value >= trigger_level -> [334,339]."""
+        req = PortfolioTriggerRequirements(
+            data_source='len',
+            direction=TriggerDirection.BELOW,
+            trigger_level=5,
+        )
+        bt = MagicMock()
+        bt.portfolio_dict = {1: 'a', 2: 'b', 3: 'c', 4: 'd', 5: 'e', 6: 'f'}
+        result = req.has_triggered(dt.date(2024, 1, 1), bt)
+        assert result.triggered is False
+
+    def test_equal_direction_not_triggered(self):
+        """EQUAL direction (else branch), value != trigger_level -> [337,339]."""
+        req = PortfolioTriggerRequirements(
+            data_source='len',
+            direction=TriggerDirection.EQUAL,
+            trigger_level=5,
+        )
+        bt = MagicMock()
+        bt.portfolio_dict = {1: 'a', 2: 'b'}
+        result = req.has_triggered(dt.date(2024, 1, 1), bt)
+        assert result.triggered is False
+
+
+class TestTradeCountTriggerRequirementsExtraBranches:
+    """Cover branches [392,397], [395,397] in TradeCountTriggerRequirements."""
+
+    def test_below_not_triggered(self):
+        """BELOW direction, value >= trade_count -> [392,397]."""
+        req = TradeCountTriggerRequirements(
+            direction=TriggerDirection.BELOW,
+            trade_count=2,
+        )
+        bt = MagicMock()
+        bt.portfolio_dict = {dt.date(2024, 1, 1): ['a', 'b', 'c']}
+        result = req.has_triggered(dt.date(2024, 1, 1), bt)
+        assert result.triggered is False
+
+    def test_equal_direction_not_triggered(self):
+        """EQUAL direction (else), value != trade_count -> [395,397]."""
+        req = TradeCountTriggerRequirements(
+            direction=TriggerDirection.EQUAL,
+            trade_count=5,
+        )
+        bt = MagicMock()
+        bt.portfolio_dict = {dt.date(2024, 1, 1): ['a', 'b']}
+        result = req.has_triggered(dt.date(2024, 1, 1), bt)
+        assert result.triggered is False

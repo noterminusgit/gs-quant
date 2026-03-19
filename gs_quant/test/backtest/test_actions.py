@@ -527,3 +527,91 @@ class TestActionCount:
         a2 = Action()
         # Counter should have incremented by 2
         assert actions_module.action_count == count_before + 2
+
+
+# ============================================================
+# Phase 6 – additional branch-coverage tests
+# ============================================================
+
+
+class TestAddWeightedTradeActionPostInit:
+    """Cover branches [284,285], [286,287], [291,-279]."""
+
+    def test_priceable_name_is_none(self):
+        """When p.name is None -> clone with generated name [284,285]."""
+        p = make_mock_priceable(name=None)
+        from gs_quant.backtests.actions import AddWeightedTradeAction
+        action = AddWeightedTradeAction(
+            priceables=Portfolio([p]),
+            name='TestAction',
+        )
+        # The priceable should have been cloned with a name like 'TestAction_Priceable0'
+        p.clone.assert_called()
+        clone_name = p.clone.call_args[1]['name']
+        assert 'TestAction_Priceable0' in clone_name
+
+    def test_priceable_name_starts_with_action_name(self):
+        """When p.name starts with self.name -> keep as is [286,287]."""
+        p = make_mock_priceable(name='TestAction_Sub')
+        p.name = 'TestAction_Sub'
+        from gs_quant.backtests.actions import AddWeightedTradeAction
+        action = AddWeightedTradeAction(
+            priceables=Portfolio([p]),
+            name='TestAction',
+        )
+        # Should NOT be cloned since name already starts with 'TestAction'
+        p.clone.assert_not_called()
+
+    def test_transaction_cost_exit_defaults_to_transaction_cost(self):
+        """When transaction_cost_exit is None -> set to transaction_cost [291,-279]."""
+        p = make_mock_priceable(name=None)
+        from gs_quant.backtests.actions import AddWeightedTradeAction
+        action = AddWeightedTradeAction(
+            priceables=Portfolio([p]),
+            name='TestAction',
+            transaction_cost_exit=None,
+        )
+        assert action.transaction_cost_exit is not None
+        assert action.transaction_cost_exit == action.transaction_cost
+
+
+class TestRebalanceActionPostInit:
+    """Cover branch [488,493]: RebalanceAction with priceable that has a name."""
+
+    def test_priceable_with_name(self):
+        """When priceable.name is not None -> clone with prefixed name [488,493]."""
+        p = make_mock_priceable(name='MySwap')
+        p.name = 'MySwap'
+        p.unresolved = MagicMock()  # Not None, so it doesn't raise
+        action = RebalanceAction(
+            priceable=p,
+            name='RebalAction',
+        )
+        # Should have cloned with name 'RebalAction_MySwap'
+        p.clone.assert_called_once()
+        clone_name = p.clone.call_args[1]['name']
+        assert clone_name == 'RebalAction_MySwap'
+
+    def test_priceable_without_name(self):
+        """When priceable.name is None -> clone with Priceable0 suffix."""
+        p = make_mock_priceable(name=None)
+        p.unresolved = MagicMock()
+        action = RebalanceAction(
+            priceable=p,
+            name='RebalAction',
+        )
+        p.clone.assert_called_once()
+        clone_name = p.clone.call_args[1]['name']
+        assert clone_name == 'RebalAction_Priceable0'
+
+    def test_transaction_cost_exit_defaults(self):
+        """When transaction_cost_exit is None -> defaults to transaction_cost."""
+        p = make_mock_priceable(name='Swap')
+        p.name = 'Swap'
+        p.unresolved = MagicMock()
+        action = RebalanceAction(
+            priceable=p,
+            name='Rebal',
+            transaction_cost_exit=None,
+        )
+        assert action.transaction_cost_exit == action.transaction_cost
