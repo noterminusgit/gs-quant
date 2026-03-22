@@ -3299,3 +3299,70 @@ class TestPortfolioRiskResultPaths:
         # The result's risk_key.ex_measure won't match 'different_context'
         with pytest.raises(KeyError, match='resolved in a different pricing context'):
             _ = prr[resolved_inst]
+
+
+# ---------------------------------------------------------------------------
+# Final branch coverage: additional tests for remaining gaps
+# ---------------------------------------------------------------------------
+
+
+class TestGetDefaultPivotsNoRuleMatch:
+    """Cover branch [79,88]: no rule matches → return (None, None, None)."""
+
+    def test_no_rule_matches(self):
+        result = get_default_pivots(
+            cls='PortfolioRiskResult',
+            has_dates='not_bool',
+            multi_measures=True,
+            multi_scen=True,
+            simple_port=True,
+            ori_cols=['instrument_name']
+        )
+        assert result == (None, None, None)
+
+
+class TestMultipleScenarioResultToRecordsEmpty:
+    """Cover branch [522,-519]: for-else in _to_records when dict is empty."""
+
+    def test_empty_msr_to_records(self):
+        msr = MultipleScenarioResult.__new__(MultipleScenarioResult)
+        dict.__init__(msr)  # empty dict
+        msr._MultipleScenarioResult__instrument = MagicMock()
+        records = msr._to_records({})
+        assert records == []
+
+
+class TestPortfolioRiskResultScenarioWithMSR:
+    """Cover branch [651,640]: result is MultipleScenarioResult when slicing by Scenario."""
+
+    def test_getitem_scenario_multi_scen_result(self):
+        from gs_quant.base import Scenario
+
+        rm = _make_rm()
+        inst = MagicMock()
+        inst.name = 'inst1'
+        inst.unresolved = None
+
+        port = MagicMock()
+        port.__iter__ = MagicMock(return_value=iter([inst]))
+        port.__len__ = MagicMock(return_value=1)
+        port.all_paths = (PortfolioPath(0),)
+        port.__contains__ = MagicMock(return_value=True)
+
+        scenario = MagicMock(spec=Scenario)
+        scenario.name = 'TestScen'
+        scenario.__hash__ = lambda s: hash('TestScen')
+        scenario.__eq__ = lambda s, o: s is o
+
+        inner_val = MagicMock()
+        msr = MultipleScenarioResult.__new__(MultipleScenarioResult)
+        dict.__init__(msr, {scenario: inner_val})
+        msr._MultipleScenarioResult__instrument = inst
+
+        future = PricingFuture(msr)
+        prr = PortfolioRiskResult(port, (rm,), [future])
+
+        with patch.object(type(prr), '_multi_scen_key',
+                          new_callable=PropertyMock, return_value=[scenario]):
+            result = prr[scenario]
+            assert isinstance(result, PortfolioRiskResult)
