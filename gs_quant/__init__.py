@@ -47,9 +47,9 @@ summary = __summary__
 
 # Set up PyXll, if available
 try:
-    from .xl_interface.instrument_generation import install_hook
+    from .xl_interface.instrument_generation import install_hook  # pragma: no cover
 
-    install_hook()
+    install_hook()  # pragma: no cover
 except ModuleNotFoundError:
     pass
 
@@ -58,7 +58,7 @@ try:
     from IPython import get_ipython
 
     ipython = get_ipython()
-    if ipython and 'IPKernelApp' in get_ipython().config:
+    if ipython and 'IPKernelApp' in get_ipython().config:  # pragma: no cover
         import nest_asyncio
 
         nest_asyncio.apply()

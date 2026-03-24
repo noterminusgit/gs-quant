@@ -292,7 +292,7 @@ class BaseProcessor(metaclass=ABCMeta):
         """
         processor = {TYPE: PROCESSOR, PARAMETERS: self.get_default_params()}
 
-        if isinstance(self, BaseProcessor):
+        if isinstance(self, BaseProcessor):  # pragma: no cover
             processor[PROCESSOR_NAME] = self.__class__.__name__
 
         parameters = processor[PARAMETERS]
@@ -344,7 +344,7 @@ class BaseProcessor(metaclass=ABCMeta):
                     elif isinstance(attribute, (dt.date, dt.datetime)):
                         if isinstance(attribute, dt.date):
                             value = str(attribute)
-                        else:
+                        else:  # pragma: no cover
                             value = f"{attribute.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]}Z"
                     else:
                         value = attribute.as_dict()

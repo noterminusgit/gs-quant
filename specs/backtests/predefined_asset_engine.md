@@ -1,39 +1,253 @@
 # predefined_asset_engine.py
 
 ## Summary
-PredefinedAssetEngine: event-driven backtest engine for predefined assets. Handles action dispatch, timer generation, calendar-aware date management, and the main event loop.
+Event-driven backtest engine for predefined assets. Provides action handler implementations (`AddTradeActionImpl`, `SubmitOrderActionImpl`), a handler factory (`PredefinedAssetEngineActionFactory`), and the main `PredefinedAssetEngine` class that orchestrates timer generation, calendar-aware date management, and a market/order/fill/valuation event loop over a `PredefinedAssetBacktest`.
 
-## Classes
+## Dependencies
+- Internal: `gs_quant.backtests` (`ValuationFixingType`), `gs_quant.backtests.action_handler` (`ActionHandlerBaseFactory`, `ActionHandler`), `gs_quant.backtests.actions` (`Action`, `AddTradeAction`, `AddTradeActionInfo`), `gs_quant.backtests.backtest_engine` (`BacktestBaseEngine`), `gs_quant.backtests.backtest_objects` (`PredefinedAssetBacktest`), `gs_quant.backtests.core` (`ValuationMethod`), `gs_quant.backtests.data_handler` (`DataHandler`), `gs_quant.backtests.data_sources` (`DataManager`), `gs_quant.backtests.event` (`ValuationEvent`, `OrderEvent`, `MarketEvent`), `gs_quant.backtests.execution_engine` (`SimulatedExecutionEngine`), `gs_quant.backtests.order` (`OrderAtMarket`), `gs_quant.datetime` (`is_business_day`, `prev_business_date`, `business_day_offset`)
+- External: `datetime` (`dt.datetime`, `dt.time`, `dt.timedelta`, `dt.timezone`), `collections` (`deque`), `functools` (`reduce`), `itertools` (`compress`), `typing` (`Union`, `Tuple`), `pandas` (`pd.bdate_range`, `pd.to_datetime`), `pandas.tseries.offsets` (`BDay`), `tqdm` (`tqdm`)
 
-### AddTradeActionImpl(ActionHandler)
-- generate_orders: for each priceable, create OrderAtMarket; if trade_duration is timedelta, also create close order
-- apply_action: calls generate_orders
+## Type Definitions
 
-### SubmitOrderActionImpl
-- apply_action: returns info directly (passthrough)
+### AddTradeActionImpl (class)
+Inherits: `ActionHandler`
 
-### PredefinedAssetEngineActionFactory
-- get_action_handler: lookup in action_impl_map, RuntimeError if not found
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| action | `AddTradeAction` | *(required)* | The trade action this handler implements |
 
-### PredefinedAssetEngine
-- __init__: sets up data_handler, default action_impl_map
-- _eod_valuation_time: window.end if exists, else dt.time(23)
-- _timer: generates all datetime states from date range × trigger times + eod time; handles calendars
-- _adjust_date: moves to nearest business day
-- run_backtest: initializes, creates timer, runs event loop
-- _run: main loop:
-  1. For each state: update data_handler, check fills, generate events
-  2. Process events: Market → check triggers → generate orders; Order → submit; Fill → update; Valuation → mark_to_market
+### SubmitOrderActionImpl (class)
+Inherits: `ActionHandler`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| action | `Action` | *(required)* | The action this handler wraps (passthrough) |
+
+### PredefinedAssetEngineActionFactory (class)
+Inherits: `ActionHandlerBaseFactory`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| action_impl_map | `dict` | `{}` (merged with `{AddTradeAction: AddTradeActionImpl}`) | Maps action types to handler classes |
+
+### PredefinedAssetEngine (class)
+Inherits: `BacktestBaseEngine`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| action_impl_map | `dict` | `{Action: SubmitOrderActionImpl}` | Maps action types to handler implementations |
+| calendars | `Union[str, Tuple[str, ...]]` | `None` | Calendar name(s) for business day filtering |
+| tz | `dt.timezone` | `dt.timezone.utc` | Timezone for the backtest |
+| data_handler | `DataHandler` | *(created in `__init__`)* | Manages market data access |
+| valuation_method | `ValuationMethod` | `ValuationMethod(ValuationFixingType.PRICE)` | Method for EOD valuation |
+| execution_engine | `SimulatedExecutionEngine` | `None` (set in `run_backtest`) | Handles order execution simulation |
+
+## Enums and Constants
+
+None defined in this module.
+
+## Functions/Methods
+
+### AddTradeActionImpl.__init__(self, action: AddTradeAction) -> None
+Purpose: Initialize handler with an `AddTradeAction`.
+
+**Algorithm:**
+1. Call `super().__init__(action)`
+
+### AddTradeActionImpl.generate_orders(self, state: dt.datetime, backtest: PredefinedAssetBacktest, info: AddTradeActionInfo) -> list[OrderAtMarket]
+Purpose: Generate market orders for each priceable in the action, optionally with close orders for timedelta durations.
+
+**Algorithm:**
+1. Initialize empty `orders` list
+2. For each `pricable` in `self.action.priceables`:
+   a. Compute `quantity`: Branch: `info is None or info.scaling is None` -> use `pricable.instrument_quantity * 1`; else -> use `info.scaling`
+   b. Append `OrderAtMarket(instrument=pricable, quantity=quantity, generation_time=state, execution_datetime=state, source=self.action.name)`
+   c. Branch: `isinstance(self.action.trade_duration, dt.timedelta)` -> append close order with `quantity * -1` and `execution_datetime=state + trade_duration`
+3. Return `orders`
+
+### AddTradeActionImpl.apply_action(self, state: dt.datetime, backtest: PredefinedAssetBacktest, info=None) -> list[OrderAtMarket]
+Purpose: Delegate to `generate_orders`.
+
+**Algorithm:**
+1. Return `self.generate_orders(state, backtest, info)`
+
+### SubmitOrderActionImpl.__init__(self, action: Action) -> None
+Purpose: Initialize passthrough handler.
+
+**Algorithm:**
+1. Call `super().__init__(action)`
+
+### SubmitOrderActionImpl.apply_action(self, state: dt.datetime, backtest: PredefinedAssetBacktest, info=None) -> Any
+Purpose: Return the info directly (passthrough -- orders are already generated by the trigger).
+
+**Algorithm:**
+1. Return `info`
+
+### PredefinedAssetEngineActionFactory.__init__(self, action_impl_map=None) -> None
+Purpose: Initialize factory with default and custom action-to-handler mappings.
+
+**Algorithm:**
+1. Branch: `action_impl_map is None` -> set to `{}`; else -> use provided map
+2. Store as `self.action_impl_map`
+3. Always set `self.action_impl_map[AddTradeAction] = AddTradeActionImpl`
+
+### PredefinedAssetEngineActionFactory.get_action_handler(self, action: Action) -> ActionHandler
+Purpose: Look up and instantiate the handler for a given action type.
+
+**Algorithm:**
+1. Branch: `type(action) in self.action_impl_map` -> return `self.action_impl_map[type(action)](action)`
+2. Branch: else -> raise `RuntimeError(f'Action {type(action)} not supported by engine')`
+
+### PredefinedAssetEngine.get_action_handler(self, action: Action) -> ActionHandler
+Purpose: Create a factory and delegate handler lookup.
+
+**Algorithm:**
+1. Create `PredefinedAssetEngineActionFactory(self.action_impl_map)`
+2. Return `handler_factory.get_action_handler(action)`
+
+### PredefinedAssetEngine.supports_strategy(self, strategy) -> bool
+Purpose: Check whether the engine supports all actions in a strategy.
+
+**Algorithm:**
+1. Collect all actions from `strategy.triggers` using `reduce` + `map`
+2. For each action, call `self.get_action_handler(x)`
+3. Branch: `RuntimeError` raised -> return `False`
+4. Branch: no exception -> return `True`
+
+### PredefinedAssetEngine.__init__(self, data_mgr: DataManager = DataManager(), calendars: Union[str, Tuple[str, ...]] = None, tz: dt.timezone = dt.timezone.utc, valuation_method: ValuationMethod = ValuationMethod(ValuationFixingType.PRICE), action_impl_map=None) -> None
+Purpose: Initialize the engine with data manager, calendars, timezone, valuation method, and action mappings.
+
+**Algorithm:**
+1. Branch: `action_impl_map is None` -> set to `{Action: SubmitOrderActionImpl}`
+2. Store `self.action_impl_map`, `self.calendars`, `self.tz`
+3. Create `self.data_handler = DataHandler(data_mgr, tz=tz)`
+4. Store `self.valuation_method`
+5. Set `self.execution_engine = None`
+
+### PredefinedAssetEngine._eod_valuation_time(self) -> dt.time
+Purpose: Return the end-of-day valuation time.
+
+**Algorithm:**
+1. Branch: `self.valuation_method.window` is truthy -> return `self.valuation_method.window.end`
+2. Branch: else -> return `dt.time(23)`
+
+### PredefinedAssetEngine._timer(self, strategy, start, end, frequency, states=None) -> list[dt.datetime]
+Purpose: Generate all datetime states for the backtest event loop from date range, trigger times, and EOD valuation time.
+
+**Algorithm:**
+1. Branch: `states is None` -> compute `dates` from `pd.bdate_range(start, end, freq=frequency)`, extracting `.date()`; else -> use `states` directly
+2. Initialize `all_times = []`, `times = []`
+3. For each trigger in `strategy.triggers`:
+   a. Branch: `hasattr(trigger, 'get_trigger_times')` ->
+      - For each `t` in `trigger.get_trigger_times()`:
+        - Branch: `isinstance(t, dt.datetime)` -> append to `all_times`
+        - Branch: else (it's a `dt.time`) -> append to `times`
+   b. Branch: no `get_trigger_times` -> skip
+4. Append `self._eod_valuation_time()` to `times`
+5. Deduplicate `times` via `dict.fromkeys(times)`
+6. Branch: `self.calendars is not None` -> filter `dates` via `is_business_day`; Branch: `self.calendars.lower() == 'weekend'` -> pass `None` as calendar; else -> pass `self.calendars`
+7. For each `d` in `dates`:
+   a. Branch: `isinstance(d, dt.datetime)` -> append `d` to `all_times`; for each `t` in `times`:
+      - Branch: `d.tzinfo is not None and d.tzinfo.utcoffset(d) is not None` -> combine `d.date()` with `t` using `d.tzinfo`
+      - Branch: else -> (no combine for this sub-case; only the raw datetime `d` was appended)
+   b. Branch: else (plain `dt.date`) -> for each `t` in `times`: `dt.datetime.combine(d, t)`
+8. Deduplicate via `set()`, sort, return
+
+### PredefinedAssetEngine._adjust_date(self, date) -> dt.date
+Purpose: Adjust a date to the nearest valid business day on the engine's calendar.
+
+**Algorithm:**
+1. Move to latest weekday: `date = (date + BDay(1) - BDay(1)).date()`
+2. Branch: `self.calendars is None` -> return `date`
+3. Branch: `self.calendars.lower() == 'weekend'` -> return `date`
+4. Branch: `is_business_day(date, self.calendars)` -> return `date`
+5. Branch: else -> return `prev_business_date(date, None if self.calendars.lower() == 'weekend' else self.calendars)`
+
+### PredefinedAssetEngine.run_backtest(self, strategy, start, end, frequency="B", states=None, initial_value=100) -> PredefinedAssetBacktest
+Purpose: Initialize and execute a full backtest, returning the backtest object.
+
+**Algorithm:**
+1. Reset data handler clock: `self.data_handler.reset_clock()`
+2. Create `backtest = PredefinedAssetBacktest(self.data_handler, initial_value)`
+3. Create `self.execution_engine = SimulatedExecutionEngine(self.data_handler)`
+4. Branch: `states is not None` -> call `self._timer(strategy, start, end, frequency, states)` directly
+5. Branch: else (states is None) ->
+   a. Adjust start: `adjusted_start = self._adjust_date(start)`
+   b. Set `backtest.set_start_date(adjusted_start)`
+   c. Compute `timer_start`:
+      - Branch: `self.calendars is None` -> `(adjusted_start + BDay(1)).date()`
+      - Branch: else -> `business_day_offset(adjusted_start, 1, roll='forward', calendars=None if self.calendars.lower() == 'weekend' else self.calendars)`
+   d. Compute `timer_end = self._adjust_date(end)`
+   e. Call `self._timer(strategy, timer_start, timer_end, frequency)`
+6. Call `self._run(strategy, timer, backtest)`
+7. Return `backtest`
+
+### PredefinedAssetEngine._run(self, strategy, timer, backtest: PredefinedAssetBacktest) -> PredefinedAssetBacktest
+Purpose: Main event loop processing market, order, fill, and valuation events for every timer state.
+
+**Algorithm:**
+1. Initialize `events = deque()`
+2. For each `state` in `tqdm(timer)`:
+   a. `self.data_handler.update(state)`
+   b. `fills = self.execution_engine.ping(state)` -> extend events with fills
+   c. Append `MarketEvent()` to events
+   d. Branch: `state.time() == self._eod_valuation_time()` -> append `ValuationEvent()`
+   e. While events not empty:
+      - Pop `event` from left
+      - Branch: `event.type == 'Market'` ->
+        - For each trigger in `strategy.triggers`:
+          - `trigger_info = trigger.has_triggered(state, backtest)`
+          - Branch: `trigger_info.triggered` ->
+            - For each action in `trigger.actions`:
+              - Branch: `info_dict and type(action) in info_dict` -> `info = info_dict[type(action)]`; else -> `info = None`
+              - Get handler, `apply_action(state, backtest, info)` -> `orders`
+              - `backtest.record_orders(orders)`
+              - Extend events with `[OrderEvent(o) for o in orders]`
+      - Branch: `event.type == 'Order'` -> `self.execution_engine.submit_order(event)`
+      - Branch: `event.type == 'Fill'` -> `backtest.update_fill(event)`
+      - Branch: `event.type == 'Valuation'` -> `backtest.mark_to_market(state, self.valuation_method)`
+3. Return `backtest`
+
+## State Mutation
+- `self.data_handler`: Clock reset in `run_backtest`, updated each state in `_run`
+- `self.execution_engine`: Set to `None` in `__init__`, replaced with `SimulatedExecutionEngine` in `run_backtest`; orders submitted and fills pinged during `_run`
+- `backtest` (PredefinedAssetBacktest): Start date set in `run_backtest`; orders recorded, fills updated, and mark-to-market called during `_run`
+- `events` (deque): Created fresh each `_run` call; extended with fills, market, order, and valuation events; drained each iteration
+- Thread safety: No synchronization; engine is designed for single-threaded use
+
+## Error Handling
+| Exception | Raised By | Condition |
+|-----------|-----------|-----------|
+| `RuntimeError` | `PredefinedAssetEngineActionFactory.get_action_handler` | When `type(action)` not found in `action_impl_map` |
+| `RuntimeError` (caught) | `PredefinedAssetEngine.supports_strategy` | Caught internally when an unsupported action is encountered; returns `False` |
+| `AttributeError` (potential) | `_adjust_date` | If `self.calendars` is not a string but is not `None` (e.g., a tuple), calling `.lower()` on it would fail |
 
 ## Edge Cases
-- states parameter overrides timer generation
-- Calendar handling: 'weekend' → use None calendar
-- tz-aware dates in timer: combine with tzinfo
-- Action type not in impl_map → RuntimeError
+- `states` parameter in `run_backtest` bypasses all date adjustment and calendar logic, using the provided states directly as timer input
+- Calendar value `'weekend'` is treated specially: `self.calendars.lower() == 'weekend'` causes `None` to be passed to `is_business_day` and `business_day_offset`, filtering only weekends
+- `_timer` may receive `dt.datetime` objects in `dates` (when `states` is provided as datetimes); these are appended directly to `all_times` AND their times are combined with trigger times if tz-aware
+- `_timer` deduplicates times via `dict.fromkeys` (preserves insertion order) and deduplicates final datetimes via `set()` (does not preserve order, but sorted afterward)
+- `_adjust_date` calls `.lower()` on `self.calendars` in the else branch, which would fail if `calendars` is a tuple of strings
+- `AddTradeActionImpl.generate_orders` uses `pricable.instrument_quantity * 1` (note typo: `pricable` vs `priceable`) as fallback quantity; if `instrument_quantity` is `None`, this produces `None * 1` -> `TypeError`
+- In `_run`, `info_dict` can be `None` or may not contain `type(action)` as a key; both are guarded with the compound conditional
+- The `apply_action` return value is assumed to always be iterable (used to create `OrderEvent` list); `SubmitOrderActionImpl` returns `info` directly which may be `None` or non-iterable
 
 ## Bugs Found
-None.
+- Line 51: `pricable.instrument_quantity * 1 if info is None or info.scaling is None else info.scaling` -- operator precedence means this evaluates as `instrument_quantity * (1 if info is None or info.scaling is None else info.scaling)`, which is correct, but the `* 1` is a no-op when the condition is true. Not a bug per se, but misleading.
+- Line 164: `self.calendars.lower() == 'weekend'` is called inside the `self.calendars is not None` block, but `calendars` could be a `Tuple[str, ...]` per the type hint, which has no `.lower()` method. This would raise `AttributeError`.
 
 ## Coverage Notes
-- ~30 branches
-- Needs mock DataManager, DataHandler
+- Branch count: ~32
+- `AddTradeActionImpl.generate_orders`: 3 branches (info/scaling None check, timedelta duration check, loop iteration)
+- `SubmitOrderActionImpl.apply_action`: 0 branches (direct return)
+- `PredefinedAssetEngineActionFactory.__init__`: 1 branch (`action_impl_map or {}`)
+- `PredefinedAssetEngineActionFactory.get_action_handler`: 2 branches (found / not found in map)
+- `PredefinedAssetEngine.supports_strategy`: 2 branches (RuntimeError caught / not caught)
+- `PredefinedAssetEngine.__init__`: 1 branch (`action_impl_map is None`)
+- `PredefinedAssetEngine._eod_valuation_time`: 2 branches (window truthy / falsy)
+- `PredefinedAssetEngine._timer`: ~10 branches (states None, hasattr trigger_times, isinstance datetime, calendars not None, calendars == weekend, isinstance d datetime, tzinfo aware)
+- `PredefinedAssetEngine._adjust_date`: 4 branches (calendars None, weekend, is_business_day, else)
+- `PredefinedAssetEngine.run_backtest`: 4 branches (states not None, calendars None for timer_start, weekend for timer_start)
+- `PredefinedAssetEngine._run`: ~6 branches (eod valuation time, 4 event types, trigger_info.triggered, info_dict lookup)
+- Mocking notes: Tests need mocked `DataManager`, `DataHandler`, `SimulatedExecutionEngine`, `PredefinedAssetBacktest`, strategy with triggers, and `tqdm` (or allow it to pass through). `is_business_day`, `prev_business_date`, and `business_day_offset` should be mocked for calendar tests.
+- Pragmas: none

@@ -561,7 +561,7 @@ class TransactionCostEntry:
                 return fixed_cost, 0
             elif self.cost_aggregation_func([fixed_cost, scaled_cost]) == scaled_cost:
                 return 0, scaled_cost
-            else:
+            else:  # pragma: no cover - unreachable: max/min of [a, b] always returns a or b
                 raise ValueError(f"Unable to split cost for aggregation function {self.cost_aggregation_func}")
 
 

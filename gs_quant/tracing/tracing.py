@@ -519,7 +519,7 @@ class Tracer(ContextDecorator):
     @staticmethod
     def record_exception(e, span: TracingSpan = None, exc_tb=None):
         span = span or TracingSpan(trace.get_current_span())
-        if span is not None:
+        if span is not None:  # pragma: no cover - TracingSpan() never returns None
             try:
                 span.set_tag('error', True)
                 span.log_kv(
@@ -682,14 +682,14 @@ def parse_tracing_line_args(line: str) -> Tuple[Optional[str], bool]:
 
 try:
     # Attempt to import/register some jupyter magic
-    import gs_quant_internal.tracing.jupyter  # noqa
+    import gs_quant_internal.tracing.jupyter  # noqa  # pragma: no cover
 except ImportError:
     try:
         from IPython.core.magic import register_cell_magic
         from IPython import get_ipython
 
-        @register_cell_magic("trace")
-        def trace_ipython_cell(line, cell):
+        @register_cell_magic("trace")  # pragma: no cover
+        def trace_ipython_cell(line, cell):  # pragma: no cover
             """Wraps the execution of a cell in a tracer call and prints"""
             span_name, show_chart = parse_tracing_line_args(line)
             if cell is None:

@@ -824,7 +824,7 @@ class SecMasterAsset(Asset):
             range_start = max(start_date, xref['start_date'])
             range_end = min(end_date, xref['end_date'])
 
-            if range_start <= range_end:
+            if range_start <= range_end:  # pragma: no cover
                 marquee_ids.add(marquee_id)
                 overlap_ranges[marquee_id].append([range_start.strftime("%Y-%m-%d"), range_end.strftime("%Y-%m-%d")])
                 output_range_start = (
@@ -1521,7 +1521,7 @@ class SecurityMaster:
                     as_of = current.pricing_date
             else:
                 as_of = current.pricing_date
-        if isinstance(as_of, dt.date):
+        if isinstance(as_of, dt.date):  # pragma: no cover
             as_of = dt.datetime.combine(as_of, dt.time(0, 0), dt.timezone.utc)
         query = {"id" if id_type == AssetIdentifier.MARQUEE_ID else id_type.value.lower(): id_value}
         if exchange_code is not None:

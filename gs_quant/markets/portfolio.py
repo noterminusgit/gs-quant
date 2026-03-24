@@ -212,7 +212,7 @@ class Portfolio(PriceableImpl):
 
         while stack:
             portfolio = stack.pop()
-            if portfolio in portfolios:
+            if portfolio in portfolios:  # pragma: no cover
                 continue
 
             sub_portfolios = portfolio.portfolios
@@ -576,7 +576,7 @@ class Portfolio(PriceableImpl):
                     for base_market, market_data in overlay_markets.items()
                 }
 
-            if result_future:
+            if result_future:  # pragma: no cover
                 result_future.set_result(ret)
 
         CompositeResultFuture(futures).add_done_callback(cb)

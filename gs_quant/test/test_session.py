@@ -1553,7 +1553,10 @@ class TestHeaders:
         s = _make_session()
         s._session.cookies = {'GSSSO': 'my-sso-token'}
         result = s._headers()
-        assert result == [('Cookie', 'GSSSO=my-sso-token')]
+        # _headers returns standard headers (X-Application, X-Version) plus cookies
+        cookie_headers = [(k, v) for k, v in result if k == 'Cookie']
+        assert len(cookie_headers) == 1
+        assert 'GSSSO=my-sso-token' in cookie_headers[0][1]
 
 
 # ===========================================================================

@@ -140,7 +140,7 @@ class FactorAnalytics:
         if not style_factors:
             raise MqValueError("Style factor exposures data is empty")
 
-        if not style_factors:
+        if not style_factors:  # pragma: no cover - unreachable, already raised above
             _logger.warning("No style factor data in hedge result")
 
         sub_factors = [{'name': item['factor'], 'value': item['exposure']} for item in style_factors]
@@ -371,9 +371,9 @@ class FactorAnalytics:
                 normalized_dates.append(item[0])
                 normalized_values.append(item[1])
 
-        if not cumulative_dates and cumulative_values:
+        if not cumulative_dates and cumulative_values:  # pragma: no cover - dates/values always same length
             cumulative_dates = list(range(len(cumulative_values)))
-        if not normalized_dates and normalized_values:
+        if not normalized_dates and normalized_values:  # pragma: no cover - dates/values always same length
             normalized_dates = list(range(len(normalized_values)))
 
         fig = go.Figure()

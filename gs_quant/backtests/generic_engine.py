@@ -86,7 +86,7 @@ class OrderBasedActionImpl(ActionHandler, metaclass=ABCMeta):
 
     def get_base_orders_for_states(self, states: Collection[dt.date], **kwargs):
         orders = {}
-        dated_priceables = getattr(self.action, 'dated_priceables', {})
+        dated_priceables = getattr(self.action, 'dated_priceables', {}) or {}
         with PricingContext():
             for s in states:
                 active_portfolio = dated_priceables.get(s) or self.action.priceables

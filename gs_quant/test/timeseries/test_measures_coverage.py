@@ -596,18 +596,18 @@ class TestGetMarketdateValidation:
             tm._get_marketdate_validation(future, dt.date(2020, 1, 1), dt.date(2030, 1, 1))
 
     def test_weekend_raises(self):
-        # Find a recent Saturday
-        today = dt.date.today()
-        days_since_saturday = (today.weekday() - 5) % 7
-        if days_since_saturday == 0 and today.weekday() != 5:
-            days_since_saturday = 7
-        saturday = today - dt.timedelta(days=days_since_saturday)
-        if saturday.weekday() != 5:
-            # fallback: find a Saturday
-            saturday = today - dt.timedelta(days=today.weekday() + 2)
+        # Use a known Saturday well in the past
+        saturday = dt.date(2025, 1, 4)  # Jan 4, 2025 is a Saturday
+        assert saturday.weekday() == 5
         date_str = saturday.strftime('%Y%m%d')
-        with pytest.raises(MqValueError, match="cannot be a weekend"):
-            tm._get_marketdate_validation(date_str, dt.date(2020, 1, 1), dt.date(2030, 1, 1))
+        # Mock pd.Timestamp.today to return a date after our Saturday, in case other tests
+        # have polluted the mock state
+        mock_today = MagicMock()
+        mock_today.date.return_value = dt.date(2026, 3, 23)
+        with patch('gs_quant.timeseries.measures.pd.Timestamp') as mock_ts:
+            mock_ts.today.return_value = mock_today
+            with pytest.raises(MqValueError, match="cannot be a weekend"):
+                tm._get_marketdate_validation(date_str, dt.date(2020, 1, 1), dt.date(2030, 1, 1))
 
     def test_beyond_end_date_raises(self):
         with pytest.raises(MqValueError, match="within end date"):

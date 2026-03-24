@@ -71,7 +71,7 @@ def get_default_pivots(
         def match(rule_value, check_value) -> bool:
             if rule_value is None:
                 return True
-            elif callable(rule_value):
+            elif callable(rule_value):  # pragma: no cover - no current rules use callables
                 return rule_value(check_value)
             else:
                 return rule_value == check_value

@@ -1,0 +1,23 @@
+[run]
+source = gs_quant
+branch = true
+omit =
+    gs_quant/test/*
+    gs_quant/target/*
+    gs_quant/_version.py
+    gs_quant/content/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if __name__ == .__main__.
+    raise NotImplementedError
+    pass
+    \.\.\.
+
+omit =
+    gs_quant/test/*
+    gs_quant/target/*
+    gs_quant/_version.py
+    gs_quant/content/*

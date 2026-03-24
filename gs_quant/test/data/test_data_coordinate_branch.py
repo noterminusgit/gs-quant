@@ -384,14 +384,16 @@ class TestAsDict:
     def test_as_dict_enum_key(self):
         """When dimension key is an Enum -> use key.value [212,213]."""
         from enum import Enum as StdEnum
+        from gs_quant.data.core import DataFrequency
 
         class DimKey(StdEnum):
             TENOR = 'tenor'
 
         coord = DataCoordinate(
-            id_='DS1',
             measure='price',
+            dataset_id='DS1',
             dimensions={DimKey.TENOR: '1m'},
+            frequency=DataFrequency.DAILY,
         )
         result = coord.as_dict()
         assert 'tenor' in result.get('dimensions', {})
