@@ -18,8 +18,9 @@ class TestHistoricalPricingContextInit:
         """Init with start and end dates."""
         from gs_quant.markets.historical import HistoricalPricingContext
 
-        start = dt.date.today() - dt.timedelta(days=10)
-        end = dt.date.today() - dt.timedelta(days=1)
+        # Use known weekdays to avoid business_day_offset errors
+        start = dt.date(2025, 1, 6)  # Monday
+        end = dt.date(2025, 1, 10)   # Friday
         hpc = HistoricalPricingContext(start=start, end=end)
         assert hpc.date_range is not None
         assert len(hpc.date_range) > 0
@@ -117,8 +118,9 @@ class TestBackToTheFuturePricingContext:
         """Init with start and end."""
         from gs_quant.markets.historical import BackToTheFuturePricingContext
 
-        start = dt.date.today() - dt.timedelta(days=10)
-        end = dt.date.today() - dt.timedelta(days=1)
+        # Use known weekdays to avoid business_day_offset errors
+        start = dt.date(2025, 1, 6)  # Monday
+        end = dt.date(2025, 1, 10)   # Friday
         bttf = BackToTheFuturePricingContext(start=start, end=end)
         assert bttf.date_range is not None
 

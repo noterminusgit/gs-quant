@@ -51,7 +51,9 @@ def pytest_runtest_makereport(item, call) -> None:
     if call.when == 'call':
         RUN_TESTS.append(item.nodeid)
         if call.excinfo:
-            FAILED_TESTS.append((item.nodeid, item))
+            marker = item.get_closest_marker('xfail')
+            if not marker:
+                FAILED_TESTS.append((item.nodeid, item))
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
